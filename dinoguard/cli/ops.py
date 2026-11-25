@@ -1,0 +1,207 @@
+"""runner / dashboard / audit / eval / alerts / approve / channel / reviewer / ask / mcp / publish / demo."""
+from __future__ import annotations
+
+import json
+import sys
+
+from rich.console import Console
+from rich.table import Table
+
+from .. import config
+
+console = Console(highlight=False)
+
+
+def _kv(pairs):
+    out = {}
+    for kv in pairs or []:
+        k, _, v = kv.partition("=")
+        try:
+            out[k] = json.loads(v)
+        except ValueError:
+            out[k] = v
+    return out
+
+
+def cmd_runner(args) -> int:
+    if args.web:
+        import webbrowser
+        webbrowser.open("http://127.0.0.1:8030/runner")
+        console.print("Opening http://127.0.0.1:8030/runner (start `dinoguard dashboard` if it is not running)")
+        return 0
+    from ..runner_ui.app import run
+    return run(fps=args.fps)
+
+
+def cmd_dashboard(args) -> int:
+    from ..dashboard.app import serve
+    return serve(port=args.port, open_browser=not args.no_open)
+
+
+def cmd_audit(args) -> int:
+    from ..audit import schedule
+    from ..store import db
+    conn = db.connect()
+    if args.status:
+        for a in schedule.list_audits(conn):
+            console.print(f" {a['id']} every {a['cadence_days']}d last={a['last_run']} next={a['next_run']} "
+                          f"email={a.get('email') or '-'}")
+        return 0
+    if args.no_schedule:
+        schedule.unschedule(conn)
+        console.print("[green]✔[/] audit schedule removed")
+        return 0
+    if args.schedule is not None:
+        if not 1 <= args.schedule <= 90:
+            console.print("[red]--schedule must be 1-90 days[/]")
+            return 2
+        schedule.set_schedule(conn, args.schedule, args.email)
+        console.print(f"[green]✔[/] audit scheduled every {args.schedule} days (runs from the daemon)")
+    from ..audit.replay import run_audit
+    res = run_audit(conn, days=args.days)
+    console.print(f"[bold]Audit[/] scanned {res['sessions']} sessions, {res['tool_calls']} tool calls "
+                  f"from {res['files']} transcript files.")
+    console.print("[dim]Findings are evidence for review, not proof.[/]")
+    t = Table("severity", "failure mode", "count", "sessions", "example")
+    for f in res["findings"]:
+        ex = (f["evidence"][0]["summary"] if f["evidence"] else "")[:60]
+        t.add_row(f["severity"], f["failure_mode"], str(f["count"]), str(len(f["session_ids"])), ex)
+    console.print(t)
+    if args.email:
+        from ..audit.schedule import email_report
+        email_report(res, args.email)
+    return 0
+
+
+def cmd_eval(args) -> int:
+    from ..evals import manage
+    from ..store import db
+    conn = db.connect()
+    if args.action == "new":
+        e = manage.new(conn, args.name, args.kind, args.spec or "", args.condition)
+        console.print(f"[green]✔[/] eval draft {e['name']} ({e['kind']}). Next: dinoguard eval test {e['name']}")
+    elif args.action == "test":
+        for r in manage.test(conn, args.name, limit=args.limit):
+            console.print(f" {r['session_id'][:12]} score={r['score']} passed={r['passed']} {r.get('reasoning') or ''}")
+    elif args.action == "deploy":
+        v = manage.deploy(conn, args.name)
+        console.print(f"[green]✔[/] deployed {args.name} v{v}; scores new sessions as they end")
+    elif args.action == "backfill":
+        n = manage.backfill(conn, args.name, limit=args.limit)
+        console.print(f"[green]✔[/] scored {n} past sessions")
+    elif args.action == "results":
+        for r in manage.results(conn, args.name, limit=args.limit):
+            console.print(f" {r['created_at']} {r['session_id'][:12]} v{r['version']} score={r['score']} "
+                          f"passed={r['passed']}")
+    else:
+        for e in manage.list_evals(conn):
+            console.print(f" {e['name']} {e['kind']} v{e['version']} {'on' if e['enabled'] else 'draft'}")
+    return 0
+
+
+def cmd_alerts(args) -> int:
+    from ..alerts import engine
+    from ..store import db
+    conn = db.connect()
+    if args.action == "new":
+        a = engine.create_from_text(conn, args.text or "", channels=args.channel or [], severity=args.severity)
+        prev = engine.preview(conn, a["id"])
+        console.print(f"[green]✔[/] alert {a['id']} '{a['name']}' ({a['trigger_kind']} {a['trigger_spec']})")
+        console.print(f"   would have fired {prev['would_fire']} times in the last 24h")
+    elif args.action == "test":
+        res = engine.test_notification(conn, args.text)
+        console.print(f"sent test to: {', '.join(res['sent']) or '-'}; errors: {res['errors'] or '-'}")
+    elif args.action == "check":
+        fired = engine.check_all(conn, config.load(), force=True)
+        console.print(f"checked; fired {len(fired)}")
+    elif args.action == "delete":
+        engine.delete(conn, args.text)
+        console.print("[green]✔[/] deleted")
+    else:
+        for a in engine.list_alerts(conn):
+            console.print(f" {a['id']} {'on ' if a['enabled'] else 'off'} {a['severity']:<8} {a['name']}")
+    return 0
+
+
+def cmd_approve(args) -> int:
+    from ..approvals import flow, setup
+    from ..store import db
+    conn = db.connect()
+    if args.action == "setup":
+        kind = "whatsapp" if args.whatsapp else "telegram" if args.telegram else None
+        if not kind:
+            console.print("[red]choose --whatsapp or --telegram[/]")
+            return 2
+        setup.interactive(kind, provider=args.provider, values=_kv(args.args))
+        console.print(f"[green]✔[/] approvals will be sent via {kind}. Enable: dinoguard policies enforce phone-approval")
+    elif args.action == "answer":
+        if len(args.args) != 2:
+            console.print("usage: dinoguard approve answer <code> yes|no")
+            return 2
+        ok = flow.answer(conn, args.args[0], args.args[1].lower() in ("y", "yes", "approve"))
+        console.print("[green]✔[/] answered" if ok else "[yellow]no pending approval with that code[/]")
+    elif args.action == "test":
+        from ..alerts.channels import send
+        ch = config.load()["approvals"].get("channel")
+        send(ch, "DinoGuard test: approvals are wired up.")
+        console.print(f"[green]✔[/] sent to {ch}")
+    else:
+        for p in flow.pending(conn):
+            console.print(f" #{p['code']} {p['sent_at']} {p['summary']}")
+    return 0
+
+
+def cmd_channel(args) -> int:
+    from ..approvals.setup import save_channel
+    save_channel(args.name, args.type, _kv(args.settings))
+    console.print(f"[green]✔[/] channel {args.name} ({args.type}) saved")
+    return 0
+
+
+def cmd_reviewer(args) -> int:
+    from ..reviewer import review
+    if args.action == "setup":
+        key = sys.stdin.readline().strip() if args.key_stdin else None
+        review.setup(url=args.url, model=args.model, mode=args.mode, key=key)
+        console.print(f"[green]✔[/] reviewer configured: {config.load()['reviewer']}")
+    elif args.action == "status":
+        console.print_json(json.dumps(review.status()))
+    else:
+        console.print_json(json.dumps(review.self_test()))
+    return 0
+
+
+def cmd_ask(args) -> int:
+    from ..assistant.nl2sql import ask
+    from ..store import db
+    res = ask(db.connect(), " ".join(args.question))
+    console.print(f"[dim]SQL ({res['method']}):[/] {res['sql']}")
+    if res.get("error"):
+        console.print(f"[red]{res['error']}[/]")
+        return 1
+    t = Table(*res["columns"])
+    for r in res["rows"][:50]:
+        t.add_row(*[str(x) for x in r])
+    console.print(t)
+    if res.get("session_ids"):
+        console.print("sessions: " + ", ".join(res["session_ids"][:10]))
+    console.print("[dim]Answers are investigation aids; check the SQL.[/]")
+    return 0
+
+
+def cmd_mcp(args) -> int:
+    from ..assistant.mcp_server import serve_stdio
+    return serve_stdio()
+
+
+def cmd_publish(args) -> int:
+    from ..packs.build import build_pack
+    res = build_pack(args.name, args.publisher, args.out)
+    console.print(f"[green]✔[/] built pack {res['name']} with {len(res['policies'])} policies in {res['out']}")
+    console.print("Upload the files in that folder as assets of a GitHub release.")
+    return 0
+
+
+def cmd_demo(args) -> int:
+    from ..runner_ui.demo import run_demo
+    return run_demo(seconds=args.seconds, show_runner=not args.no_runner)

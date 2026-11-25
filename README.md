@@ -1,0 +1,98 @@
+# DinoGuard 🦕
+
+Local guardrails and observability for AI coding agents (Claude Code, Cursor, Codex, Copilot, Gemini CLI, and your
+own agents). DinoGuard sits between the agent's harness and the real action. **Before** every tool call it answers
+**allow / instruct / deny**. It records everything locally, shows a live dotted dino runner, and gives you a
+dashboard, audits, evals, alerts and phone approvals.
+
+![dino runner](docs/runner.gif)
+
+Architecture inspired by FailproofAI. No code reused.
+
+## Quick start
+
+```bash
+pipx install dinoguard          # or: pip install -e .  (from this repo)
+dinoguard install               # Claude Code hooks (user scope) + start the fail-closed daemon
+dinoguard runner                # dotted dino strip for a split pane
+dinoguard dashboard             # http://127.0.0.1:8030
+dinoguard demo                  # 60 s scripted risky session that shows every runner state
+```
+
+`dinoguard install` works non-interactively (set `DG_NO_FIRST_RUN=1` to skip the first-run wizard). Other harnesses:
+`dinoguard install --harness cursor|gemini|copilot|codex|opencode [--scope user|project|local]`. Undo with
+`dinoguard uninstall`, which restores your settings file byte-for-byte.
+
+## How it works
+
+```
+harness hook JSON → adapter → canonical event → policy engine (daemon) → decision → adapter → native response
+                                                     │
+                       SQLite store · stream.jsonl · runner · dashboard · alerts · reviewer
+```
+
+- **Adapters** turn each harness's events and tool names into one canonical shape. Policies never see
+  harness-specific formats. See `docs/adapters/`.
+- **Fail-closed daemon:** once configured, if `dinoguardd` is down, times out or speaks another protocol version,
+  every guarded action is denied with a hint to run `dinoguard doctor`. (Windows uses a localhost TCP socket with an
+  auth token, because CPython has no `AF_UNIX` there.)
+- **Engine:** built-ins run first, first deny wins, instructs are merged, each policy has a 10 s deadline,
+  observe/enforce per policy, hard/reviewable authority. `guard-self-protect` is always on.
+
+## Policies
+
+50 built-ins across self-protection, secrets, environment, dangerous commands, infrastructure, git, database,
+packages, AI failure modes (loops, hallucinated paths, goal drift, finished tasks, destructive shapes), turn-end
+workflow gates, token coaching and phone approval.
+
+```bash
+dinoguard policies                       # list with enabled/mode/authority
+dinoguard policies enforce no-git-add-all
+dinoguard policies set token-budget budget_usd=5
+```
+
+Write your own in `.dinoguard/policies/*policies.py` (project) or `~/.dinoguard/policies/` (user):
+
+```python
+from dinoguard import policy, allow, deny
+
+@policy(name="no-generated-edits", events=["PreToolUse"], params={"dirs": ["dist", "generated"]})
+def no_generated_edits(ctx):
+    if ctx.tool_name in ("Write", "Edit"):
+        path = str(ctx.tool_input.get("file_path", ""))
+        if any(f"/{d}/" in f"/{path}" for d in ctx.params["dirs"]):
+            return deny("Edit the source and run the generator instead.")
+    return allow()
+```
+
+New custom policies start in **observe** mode. Or let DinoGuard draft one:
+`dinoguard policy new "never touch the payments folder"` → `test` → `backtest` → `publish` →
+`deploy --mode observe` → `policies enforce`, and `rollback` if needed.
+
+## Everything else
+
+| Feature | Command / place |
+|---|---|
+| Dotted dino runner (terminal / web) | `dinoguard runner`, `dinoguard runner --web` |
+| Dashboard: home, sessions, traces + sub-agent graph, live, policies, audit, insights, evals, alerts, metrics (p50/p95/p99), SQL queries + tiles, settings, Ctrl+J assistant | `dinoguard dashboard` |
+| Local audit of past Claude Code sessions | `dinoguard audit [--schedule 7] [--email you@x]` |
+| LLM reviewer for reviewable policies (any OpenAI-compatible endpoint) | `dinoguard reviewer setup --url ... --key-stdin --mode observe` |
+| Phone approval (Telegram / WhatsApp via Twilio or Meta) | `dinoguard approve setup --telegram`, `dinoguard policies enforce phone-approval` |
+| Alerts ("tell me when denies > 5 in 10 minutes") → insights + Slack/email/webhook/Telegram/WhatsApp | `dinoguard alerts new "..." --channel ops` |
+| Evals (safe code expressions, LLM judge, classifier, external worker) + built-in sentiment | `dinoguard eval new|test|deploy|backfill|results` |
+| Ask your data (read-only SQL) + MCP server | `dinoguard ask "..."`, `dinoguard mcp` |
+| Policy packs from GitHub releases (SHA256SUMS-pinned; integrity, not a signature) | `dinoguard policies add owner/repo@tag` |
+| SDK for custom agents + OpenTelemetry ingest | `from dinoguard import check`, `docs/adapters/sdk.md` |
+
+All data stays in `~/.dinoguard/` (SQLite in WAL mode plus `stream.jsonl`). Secrets are redacted before storage.
+Network calls happen only for the optional reviewer/LLM features, alerts, approvals, and pack downloads.
+
+## Development
+
+```bash
+pip install -e ".[dev]"
+pytest -q
+python demo/make_gif.py      # regenerate docs/runner.gif (needs Pillow)
+```
+
+See `PROGRESS.md` for build status and `CLAUDE.md` for the design.

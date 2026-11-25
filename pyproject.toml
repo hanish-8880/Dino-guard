@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dinoguard"
+version = "0.1.0"
+description = "Local guardrails + observability for AI coding agents, with a dotted dino runner."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+  "fastapi",
+  "uvicorn",
+  "pydantic",
+  "rich",
+  "httpx",
+  "pyyaml",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "watchfiles"]
+
+[project.scripts]
+dinoguard = "dinoguard.cli.main:main"
+dinoguardd = "dinoguard.daemon.server:main"
+dinoguard-hook = "dinoguard.hook.client:main"
+
+[tool.setuptools.packages.find]
+include = ["dinoguard*"]
+
+[tool.setuptools.package-data]
+dinoguard = [
+  "store/migrations/*.sql",
+  "tokens/prices.yaml",
+  "dashboard/static/*",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-p no:cacheprovider"
