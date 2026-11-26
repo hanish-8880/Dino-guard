@@ -116,17 +116,18 @@ def test_phone_approval_yes(conn, monkeypatch):
     approver = flow.make_approver(_cfg(), conn, sender=lambda ch, text: msgs.append(text))
     code = {}
 
+    from dinoguard.store import db
+    other = db.connect()  # the "phone" answers on its own connection, like the real daemon
+
     def answer_later():
         for _ in range(100):
-            p = flow.pending(conn)
+            p = flow.pending(other)
             if p:
                 code["c"] = p[0]["code"]
-                flow.answer(conn, p[0]["code"], True)
+                flow.answer(other, p[0]["code"], True)
                 return
             time.sleep(0.02)
-    from dinoguard.store import db
-    other = db.connect()
-    t = threading.Thread(target=lambda: (answer_later.__globals__.update(conn=other), answer_later()))
+    t = threading.Thread(target=answer_later)
     t.start()
     d = approver(bash("terraform apply"), ask_human("needs approval", 5))
     t.join()
