@@ -134,3 +134,59 @@ def test_preconditions(project):
     assert not precondition_holds(c, PolicyContext(event=bash("x"), probe=FakeProbe(branch="feat")))
     c.precondition = "system_or_root_paths"
     assert precondition_holds(c, ctx)
+
+
+def test_llm_reasoning_effort_and_cut_off_answers(monkeypatch):
+    import httpx
+
+    from dinoguard import config, llm
+    sent = []
+
+    class Resp:
+        status_code = 200
+
+        def __init__(self, finish):
+            self.finish = finish
+
+        def json(self):
+            return {"choices": [{"message": {"content": '{"verdict": "allow"}'}, "finish_reason": self.finish}]}
+
+    finish = {"v": "stop"}
+    monkeypatch.setattr(httpx, "post", lambda url, headers, timeout, json: sent.append(json) or Resp(finish["v"]))
+    google = "https://generativelanguage.googleapis.com/v1beta/openai"
+    config.update(lambda c: c["reviewer"].update(url=google, model="gemini-2.5-flash"))
+    assert llm.complete_json("s", "u", section="reviewer") == {"verdict": "allow"}
+    assert sent[-1]["reasoning_effort"] == "low" and sent[-1]["max_tokens"] == 2048
+    config.update(lambda c: c["reviewer"].update(url="https://api.example.com/v1", model="gpt-4o-mini"))
+    llm.complete("s", "u", section="reviewer")
+    assert "reasoning_effort" not in sent[-1]                 # non-reasoning models reject the field
+    config.update(lambda c: c["reviewer"].update(url=google, reasoning_effort="off"))
+    llm.complete("s", "u", section="reviewer")
+    assert "reasoning_effort" not in sent[-1]
+    finish["v"] = "length"
+    with pytest.raises(llm.LLMUnavailable, match="cut off"):
+        llm.complete_json("s", "u", section="reviewer")
+
+
+def test_reviewer_setup_key_stdin_reports_what_happened(monkeypatch, capsys):
+    import io
+
+    from dinoguard.cli.main import main
+    from dinoguard.reviewer.review import status
+    url = ["--url", "https://example.invalid/v1", "--model", "m"]
+    monkeypatch.setattr("sys.stdin", io.StringIO("\n"))                       # Enter pressed, nothing pasted
+    assert main(["reviewer", "setup", *url, "--key-stdin"]) == 0
+    out = capsys.readouterr().out
+    assert "no key was entered" in out and not status()["has_key"]
+    monkeypatch.setattr("sys.stdin", io.StringIO("test-key-1234567890\n"))    # piped in
+    assert main(["reviewer", "setup", *url, "--key-stdin"]) == 0
+    out = capsys.readouterr().out
+    assert "API key saved (19 characters" in out and status()["has_key"] and "test-key" not in out
+
+    class Tty(io.StringIO):
+        def isatty(self):
+            return True
+    monkeypatch.setattr("sys.stdin", Tty(""))
+    monkeypatch.setattr("getpass.getpass", lambda prompt: "typed-key-abcdefghij")   # hidden prompt at a terminal
+    assert main(["reviewer", "setup", *url, "--key-stdin"]) == 0
+    assert "API key saved (20 characters" in capsys.readouterr().out

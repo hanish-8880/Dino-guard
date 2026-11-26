@@ -1,7 +1,7 @@
 # PROGRESS
 
 Built in one pass on 2026-11-25, phase by phase per CLAUDE.md §14. `pytest -q` was green at the end of every phase.
-Current: **510 tests passing** (after Phases 12–13 on 2026-11-26). Every file is under 400 lines (largest is 342).
+Current: **512 tests passing** (after Phases 12–13 on 2026-11-26). Every file is under 400 lines (largest is 342).
 
 ## Phase 13 — SDK lifecycle, more harnesses, MCP writes, undo ✅ (2026-11-26, CLAUDE.md §17.9–17.12)
 Tests: `tests/test_sdk_tracer.py`, `tests/test_more_harnesses.py`, `tests/test_mcp_undo.py`, plus new cases in
@@ -38,6 +38,12 @@ file-path field names). Deep Agents Code fails open on hook errors (no option to
 - **Phase 11, packaging.** A wheel builds cleanly (163 files, with migrations, dashboard assets, prices and the 3
   console scripts), installs into a fresh venv, and runs `dinoguard --version`. **Published to PyPI as
   `dinoguard` 0.1.0 on 2026-11-26** (wheel + sdist, both pass `twine check`), so `pipx install dinoguard` works.
+  - 0.1.1 (2026-11-26): the daemon starts on login.
+  - 0.1.2: the reviewer works with thinking models. Gemini 2.5 Flash spent the 800-token limit on hidden thinking,
+    so every live verdict was cut-off JSON; now it gets `reasoning_effort: low` on Google's endpoint, a 2,048-token
+    limit, and a clear "cut off" error. `reviewer setup --key-stdin` shows a hidden prompt and confirms the key is
+    saved. The README marks untested integrations as beta. Reviewer verified live with Gemini 2.5 Flash: it allowed
+    an on-task read of the hosts file and denied an off-task read of an SSH key.
 
 ## Phase 12 — Inventory gaps, local core ✅ (2026-11-26, CLAUDE.md §17.1–17.8)
 Added after the 2026-11-26 feature inventory. Tests: `tests/test_inventory_data.py`, `tests/test_inventory_audit.py`,

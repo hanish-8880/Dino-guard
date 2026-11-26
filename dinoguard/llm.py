@@ -37,18 +37,39 @@ def complete(system: str, user: str, section: str = "llm", timeout: float = 20.0
     if key:
         headers["Authorization"] = f"Bearer {key}"
     endpoint = url.rstrip("/") + ("" if url.rstrip("/").endswith("/chat/completions") else "/chat/completions")
+    body = {"model": model, "temperature": 0, "max_tokens": max_tokens,
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
+    effort = reasoning_effort(section, url)
+    if effort:
+        body["reasoning_effort"] = effort
     try:
-        r = httpx.post(endpoint, headers=headers, timeout=timeout, json={
-            "model": model, "temperature": 0, "max_tokens": max_tokens,
-            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]})
+        r = httpx.post(endpoint, headers=headers, timeout=timeout, json=body)
     except httpx.HTTPError as e:
         raise LLMUnavailable(f"LLM request failed: {e}") from e
     if r.status_code >= 300:
         raise LLMUnavailable(f"LLM HTTP {r.status_code}: {r.text[:200]}")
     try:
-        return r.json()["choices"][0]["message"]["content"] or ""
-    except (KeyError, IndexError, ValueError) as e:
+        choice = r.json()["choices"][0]
+        text = choice["message"].get("content") or ""
+    except (KeyError, IndexError, ValueError, AttributeError) as e:
         raise LLMUnavailable(f"unexpected LLM response: {e}") from e
+    if choice.get("finish_reason") == "length":
+        raise LLMUnavailable(f"the model's answer was cut off at max_tokens={max_tokens} (thinking models spend "
+                             "part of it before answering); raise max_tokens or lower reasoning_effort")
+    return text
+
+
+def reasoning_effort(section: str, url: str | None) -> str | None:
+    """`reasoning_effort` from config[section] (or [llm]); thinking models on Google's OpenAI-compatible endpoint
+    default to "low" so the thinking budget doesn't crowd out the answer. Other endpoints get nothing unless set,
+    because models without reasoning reject the field."""
+    cfg = config_mod.load()
+    val = (cfg.get(section) or {}).get("reasoning_effort") or (cfg.get("llm") or {}).get("reasoning_effort")
+    if val:
+        return None if str(val).lower() == "off" else str(val)
+    if url and "generativelanguage.googleapis.com" in url:
+        return "low"
+    return None
 
 
 def extract_json(text: str):
@@ -60,8 +81,8 @@ def extract_json(text: str):
     return json.loads(body[start: max(body.rfind("}"), body.rfind("]")) + 1])
 
 
-def complete_json(system: str, user: str, section: str = "llm", timeout: float = 20.0):
-    text = complete(system, user, section, timeout)
+def complete_json(system: str, user: str, section: str = "llm", timeout: float = 20.0, max_tokens: int = 2048):
+    text = complete(system, user, section, timeout, max_tokens=max_tokens)
     try:
         return extract_json(text)
     except ValueError as e:

@@ -223,9 +223,23 @@ def cmd_channel(args) -> int:
 def cmd_reviewer(args) -> int:
     from ..reviewer import review
     if args.action == "setup":
-        key = sys.stdin.readline().strip() if args.key_stdin else None
-        review.setup(url=args.url, model=args.model, mode=args.mode, key=key)
+        key = None
+        if args.key_stdin:
+            if sys.stdin.isatty():         # typed/pasted at a terminal: say so, and don't echo the key
+                import getpass
+                key = getpass.getpass("Paste the API key (hidden), then press Enter: ").strip()
+            else:                          # piped in
+                key = sys.stdin.readline().strip()
+        review.setup(url=args.url, model=args.model, mode=args.mode, key=key or None)
         console.print(f"[green]✔[/] reviewer configured: {config.load()['reviewer']}")
+        if key:
+            console.print(f"[green]✔[/] API key saved ({len(key)} characters, stored in the DinoGuard secrets file, "
+                          "never shown)")
+        elif args.key_stdin:
+            console.print("[yellow]![/] no key was entered, so none was saved. Run the same command again and paste "
+                          "the key at the prompt.")
+        if not review.status()["has_key"]:
+            console.print("[yellow]![/] the reviewer has no API key yet; calls will fail until you add one.")
     elif args.action == "status":
         console.print_json(json.dumps(review.status()))
     else:
