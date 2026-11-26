@@ -63,7 +63,10 @@ CASES = {
     "no-read-outside-project": {
         "fire": [{"tool": "Read", "input": {"file_path": "/etc/passwd"}}, "cat /etc/hosts"],
         "allow": [{"tool": "Read", "input": {"file_path": "src/a.py"}},
-                  {"tool": "Read", "input": {"file_path": "~/.claude/settings.json"}}],
+                  {"tool": "Read", "input": {"file_path": "~/.claude/settings.json"}},
+                  # the default "/tmp" entry covers the real OS temp folder (%TEMP% on Windows), not only /tmp
+                  {"tool": "Read", "input": {"file_path": __import__("os").path.join(
+                      __import__("tempfile").gettempdir(), "scratch", "notes.txt")}}],
     },
     "no-sudo": {"fire": ["sudo apt install x", "doas reboot", "FOO=1 sudo ls"],
                 "allow": ["echo 'use sudo carefully'", "ls"]},

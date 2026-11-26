@@ -106,6 +106,9 @@ def no_env_dump(ctx):
 def no_read_outside_project(ctx):
     cwd = ctx.cwd
     allowed = [norm_path(a) for a in ctx.params.get("allow", [])]
+    if "/tmp" in ctx.params.get("allow", []):           # "/tmp" means the OS temp folder everywhere (%TEMP% on Windows)
+        import tempfile
+        allowed.append(norm_path(tempfile.gettempdir()))
     candidates: list[str] = []
     if ctx.tool_name in ("Read", "Grep", "Glob"):
         p = file_path(ctx) if ctx.tool_name == "Read" else str(ctx.tool_input.get("path") or "")
