@@ -1,4 +1,4 @@
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 
 # Bumped whenever the hook client <-> daemon wire format changes.
 # A mismatch between client and daemon is a hard fail-closed condition.
