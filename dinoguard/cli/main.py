@@ -32,7 +32,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--minutes", type=int, default=30)
     p.add_argument("--off", action="store_true", help="end the pause now")
     p = _p(sub, "daemon", "Start/stop/status the dinoguardd daemon", core.cmd_daemon)
-    p.add_argument("action", choices=["start", "stop", "status", "restart", "run"])
+    p.add_argument("action", choices=["start", "stop", "status", "restart", "run", "autostart", "no-autostart"],
+                   help="autostart / no-autostart: start the daemon when you log in (install turns this on)")
 
     p = _p(sub, "runner", "Dotted dino runner (terminal strip; --web for the browser)", ops.cmd_runner)
     p.add_argument("--web", action="store_true")

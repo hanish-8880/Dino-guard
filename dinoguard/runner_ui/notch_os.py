@@ -13,12 +13,8 @@ APP_NAME = "DinoGuard notch"
 
 def gui_python() -> str:
     """pythonw.exe on Windows (no console window), else the current interpreter."""
-    exe = Path(sys.executable)
-    if sys.platform == "win32":
-        w = exe.with_name("pythonw.exe")
-        if w.exists():
-            return str(w)
-    return str(exe)
+    from ..autostart import gui_python as _g
+    return _g()
 
 
 def launch_args() -> list[str]:
@@ -55,76 +51,23 @@ def spawn_detached() -> int:
     return subprocess.Popen(launch_args(), **kw).pid
 
 
-# ---- open on login ---------------------------------------------------------------------------
+# ---- open on login (shared with the daemon: dinoguard/autostart.py) ---------------------------
 
 def startup_dir() -> Path:
-    override = os.environ.get("DG_STARTUP_DIR")
-    if override:
-        return Path(override)
-    if sys.platform == "win32":
-        return Path(os.environ.get("APPDATA", Path.home() / "AppData/Roaming")) / \
-            "Microsoft/Windows/Start Menu/Programs/Startup"
-    if sys.platform == "darwin":
-        return Path.home() / "Library/LaunchAgents"
-    return Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "autostart"
+    from .. import autostart
+    return autostart.startup_dir()
 
 
 def autostart_path() -> Path:
-    d = startup_dir()
-    if sys.platform == "darwin" and not os.environ.get("DG_STARTUP_DIR"):
-        return d / "dev.dinoguard.notch.plist"
-    if sys.platform == "win32":
-        return d / f"{APP_NAME}.lnk"
-    return d / "dinoguard-notch.desktop"
-
-
-def _ps_quote(s: str) -> str:
-    return "'" + s.replace("'", "''") + "'"
-
-
-def _make_lnk(target: Path, args: list[str]) -> bool:
-    exe, rest = args[0], subprocess.list2cmdline(args[1:])
-    script = (f"$s=(New-Object -ComObject WScript.Shell).CreateShortcut({_ps_quote(str(target))});"
-              f"$s.TargetPath={_ps_quote(exe)};$s.Arguments={_ps_quote(rest)};"
-              f"$s.WorkingDirectory={_ps_quote(str(Path.home()))};"
-              f"$s.Description={_ps_quote('DinoGuard floating dino')};$s.Save()")
-    try:
-        r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
-                           capture_output=True, timeout=30)
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    return r.returncode == 0 and target.exists()
+    from .. import autostart
+    return autostart.path("notch")
 
 
 def enable_autostart() -> Path:
-    target = autostart_path()
-    target.parent.mkdir(parents=True, exist_ok=True)
-    args = launch_args()
-    if target.suffix == ".lnk":
-        if _make_lnk(target, args):
-            return target
-        target = target.with_suffix(".vbs")            # fallback: hidden-window script
-        cmd = subprocess.list2cmdline(args).replace('"', '""')
-        target.write_text(f'CreateObject("WScript.Shell").Run "{cmd}", 0, False\r\n', encoding="utf-8")
-    elif target.suffix == ".plist":
-        items = "".join(f"<string>{a}</string>" for a in args)
-        target.write_text(
-            '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict>'
-            "<key>Label</key><string>dev.dinoguard.notch</string>"
-            f"<key>ProgramArguments</key><array>{items}</array>"
-            "<key>RunAtLoad</key><true/></dict></plist>\n", encoding="utf-8")
-    else:
-        import shlex
-        target.write_text("[Desktop Entry]\nType=Application\nName=DinoGuard notch\n"
-                          f"Exec={shlex.join(args)}\nX-GNOME-Autostart-enabled=true\n", encoding="utf-8")
-    return target
+    from .. import autostart
+    return autostart.enable("notch", launch_args())
 
 
 def disable_autostart() -> list[Path]:
-    base = autostart_path()
-    removed = []
-    for p in {base, base.with_suffix(".vbs")}:
-        if p.exists():
-            p.unlink()
-            removed.append(p)
-    return removed
+    from .. import autostart
+    return autostart.disable("notch")
