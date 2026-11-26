@@ -24,11 +24,19 @@ def _install_harness(harness: str, scope: str) -> dict:
 
 
 def cmd_install(args) -> int:
-    res = _install_harness(args.harness, args.scope)
-    console.print(f"{OK} hooks written to [bold]{res['settings']}[/]")
-    console.print(f"   command: [dim]{res['command']}[/]")
-    if res.get("note"):
-        console.print(f"{WARN} {res['note']}")
+    try:
+        res = _install_harness(args.harness, args.scope)
+    except ValueError as e:
+        console.print(f"{WARN} {e}")
+        return 2
+    if str(res["settings"]).startswith("(manual"):
+        console.print(f"{WARN} {args.harness}: one manual step, then the daemon below does the rest.")
+        print(res.get("note") or "")
+    else:
+        console.print(f"{OK} hooks written to [bold]{res['settings']}[/]")
+        console.print(f"   command: [dim]{res['command']}[/]")
+        if res.get("note"):
+            console.print(f"{WARN} {res['note']}")
     if args.no_daemon:
         config.update(lambda c: c["daemon"].update(enabled=False))
         console.print(f"{OK} in-process mode (no daemon)")
@@ -110,6 +118,7 @@ def doctor_checks() -> list[tuple[str, str, str]]:
                 out.append(("fail", f"hooks ({scope})", "PreToolUse is not wired"))
     if not any(c[1].startswith("hooks") for c in out):
         out.append(("warn", "hooks", "no DinoGuard hooks found; run `dinoguard install`"))
+    out.extend(drift_checks())
     from ..engine.registry import build
     reg = build(os.getcwd())
     out.append(("ok", "policies", f"{len(reg.policies)} loaded"))
@@ -156,8 +165,49 @@ def cmd_status(args) -> int:
         t.add_row("pause", f"until {cfg['pause_until']}")
     ins = c.execute("SELECT COUNT(*) FROM insights WHERE status != 'resolved'").fetchone()[0]
     t.add_row("insights", f"{ins} open")
+    t.add_row("environment", config.environment(cfg))
+    days = int(cfg.get("retention_days") or 0)
+    t.add_row("retention", f"{days} days" if days else "keep forever")
     console.print(t)
+    console.print(capability_table(c))
     return 0
+
+
+def drift_checks() -> list[tuple[str, str, str]]:
+    """Hook drift (CLAUDE.md §17.7): native events/tools the adapters didn't recognise in the last 7 days."""
+    try:
+        from ..adapters import get_adapter
+        from ..store import db, drift
+        out = []
+        for d in drift.recent(db.connect(), days=7):
+            try:
+                verified = get_adapter(d["harness"]).VERIFIED_VERSION
+            except ValueError:
+                verified = None
+            out.append(("warn", f"hook drift ({d['harness']})",
+                        f"unknown {d['kind']} {d['value']!r} seen {d['count']}x (harness {d['harness_version'] or '?'};"
+                        f" adapter verified for {verified or 'nothing yet'}). Check docs/adapters/ and the harness "
+                        "changelog."))
+        return out
+    except Exception as e:  # noqa: BLE001
+        return [("warn", "hook drift", f"could not check: {e}")]
+
+
+def capability_table(conn) -> Table:
+    """What DinoGuard can block vs only observe, per harness seen or wired (CLAUDE.md §17.7)."""
+    from ..adapters import get_adapter
+    from ..adapters.install import wiring
+    seen = {r[0] for r in conn.execute("SELECT DISTINCT harness FROM sessions WHERE harness IS NOT NULL")}
+    if wiring("user", os.getcwd()).get("present"):
+        seen.add("claude")
+    t = Table("harness", "can block", "verified", title="capabilities (blocking after a tool ran can't undo it)")
+    for h in sorted(seen):
+        try:
+            a = get_adapter(h)
+        except ValueError:
+            continue
+        t.add_row(h, ", ".join(sorted(a.blocking_events)) or "nothing (observe-only)", a.VERIFIED_VERSION or "-")
+    return t
 
 
 def cmd_pause(args) -> int:
@@ -175,11 +225,15 @@ def cmd_daemon(args) -> int:
     from ..daemon import server
     if args.action == "run":
         return server.main([])
+    marker = paths.home() / "daemon.stopped"       # hooks don't auto-start a daemon you stopped on purpose
     if args.action in ("stop", "restart"):
         console.print(f"{OK} stopped" if server.stop() else f"{WARN} not running")
         if args.action == "stop":
+            marker.write_text("stopped by `dinoguard daemon stop`", encoding="utf-8")
+            console.print(f"{WARN} guarded actions are denied until `dinoguard daemon start` (hooks won't restart it)")
             return 0
     if args.action in ("start", "restart"):
+        marker.unlink(missing_ok=True)
         if server.is_running(1.0):
             console.print(f"{OK} already running")
         else:

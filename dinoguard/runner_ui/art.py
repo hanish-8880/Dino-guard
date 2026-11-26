@@ -1,28 +1,33 @@
 """Original dotted dino ("Dot", a little plated guard-dino) drawn on a pixel grid, rendered as braille."""
 from __future__ import annotations
 
-# 16 x 12 pixel frames, '#' = dot on. Head on the right, back plates on top, tail on the left.
+# 22 x 15 dot frames: 13 body rows + 2 leg rows. 'X' = dot on. Head on the right, back spikes on top,
+# tail on the left. Walking alternates legs A / B.
 _BODY = [
-    "...........######...",
-    "..........########..",
-    "..........##.#####..",   # eye
-    "...#..#..#########..",   # back plates
-    "..###.###.######....",
-    "#############.......",
-    ".############.......",
-    "..##########........",
+    "..............XXXXXX..",
+    ".............XXXXXXXX.",
+    ".............XX.XXXXXX",   # eye
+    ".............XXXXXXXXX",
+    ".............XXXXXXXXX",
+    ".......X.X.X.XXXXX....",   # back spikes
+    "......XXXXXXXXXXXXXX..",
+    "X....XXXXXXXXXXXXX....",
+    "XX..XXXXXXXXXXXXXX.XX.",   # little arm
+    ".XXXXXXXXXXXXXXXXX....",
+    "..XXXXXXXXXXXXXXX.....",
+    "....XXXXXXXXXXXX......",
+    ".....XXXX..XXXX.......",
 ]
-_LEGS_A = ["..###....###........", "..##.....##.........", ".###....###.........", "...................."]
-_LEGS_B = ["...###..###.........", "....##..##..........", "....###.###.........", "...................."]
-_LEGS_STOP = ["..###.....###.......", "..##......##........", ".###.....###........", "...................."]
-_BLINK = [r if i != 2 else "..........########.." for i, r in enumerate(_BODY)]
+_LEGS_A = ["....XX.......XX.......", "....XXX......XXX......"]
+_LEGS_B = ["......XX...XX.........", "......XXX..XXX........"]
+_BLINK = [r if i != 2 else ".............XXXXXXXXX" for i, r in enumerate(_BODY)]
 
-FRAMES = {
+FRAMES = {k: [row.replace("X", "#") for row in v] for k, v in {
     "a": _BODY + _LEGS_A,
     "b": _BODY + _LEGS_B,
-    "stop": _BODY + _LEGS_STOP,
-    "blink": _BLINK + _LEGS_STOP,
-}
+    "stop": _BODY + _LEGS_A,
+    "blink": _BLINK + _LEGS_A,
+}.items()}
 
 _BITS = {(0, 0): 0x01, (0, 1): 0x02, (0, 2): 0x04, (1, 0): 0x08, (1, 1): 0x10, (1, 2): 0x20, (0, 3): 0x40,
          (1, 3): 0x80}

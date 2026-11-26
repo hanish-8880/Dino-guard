@@ -16,6 +16,7 @@ from .common import map_generic
 
 class SDKAdapter(Adapter):
     name = "sdk"
+    VERIFIED_VERSION = "dinoguard SDK (same package version)"
     blocking_events = frozenset({"PreToolUse", "UserPromptSubmit", "Stop", "PermissionRequest"})
 
     def to_canonical(self, raw: dict) -> CanonicalEvent:
@@ -23,11 +24,18 @@ class SDKAdapter(Adapter):
         if raw.get("tool"):
             name, inp = map_generic(raw["tool"], raw.get("input"))
             tool = make_tool(name, inp)
+        session = {"id": raw.get("session_id") or "sdk", "cwd": raw.get("cwd") or os.getcwd()}
+        if raw.get("environment"):
+            session["environment"] = str(raw["environment"])[:64]
+        extra = raw.get("extra") if isinstance(raw.get("extra"), dict) else {}
+        output = raw.get("output")
+        output = output if output is None or isinstance(output, str) else json.dumps(output, default=str)
+        dur = raw.get("duration_ms")
         return CanonicalEvent(event=str(raw.get("event") or "PreToolUse"), harness=str(raw.get("harness") or self.name),
-                              session={"id": raw.get("session_id") or "sdk", "cwd": raw.get("cwd") or os.getcwd()},
-                              tool=tool, prompt=raw.get("prompt"), output=raw.get("output"),
-                              output_chars=len(raw.get("output") or ""), error=raw.get("error"),
-                              agent_id=raw.get("agent_id"), raw=raw)
+                              session=session, tool=tool, prompt=raw.get("prompt"), output=output,
+                              output_chars=len(output or ""), error=raw.get("error"),
+                              duration_ms=int(dur) if isinstance(dur, (int, float)) else None,
+                              agent_id=raw.get("agent_id"), tool_use_id=raw.get("tool_use_id"), extra=extra, raw=raw)
 
     def to_native(self, event, decision: Decision) -> NativeResponse:
         return NativeResponse(0, json.dumps({"decision": decision.kind, "reason": decision.reason,
@@ -53,10 +61,11 @@ def evaluate_event(event: CanonicalEvent) -> Decision:
     return Service(cfg=cfg).decide(event)
 
 
-def check(tool: str, input: dict, session_id: str | None = None, event: str = "PreToolUse",  # noqa: A002
+def check(tool: str | None, input: dict | None, session_id: str | None = None, event: str = "PreToolUse",  # noqa: A002
           cwd: str | None = None, harness: str = "sdk", prompt: str | None = None, output: str | None = None,
-          error: str | None = None, agent_id: str | None = None) -> Decision:
+          error: str | None = None, agent_id: str | None = None, **more) -> Decision:
+    """`more` may carry environment, extra, duration_ms, tool_use_id (see the wire format above)."""
     ev = SDKAdapter().to_canonical({"event": event, "tool": tool, "input": input, "session_id": session_id,
                                     "cwd": cwd, "harness": harness, "prompt": prompt, "output": output,
-                                    "error": error, "agent_id": agent_id})
+                                    "error": error, "agent_id": agent_id, **more})
     return evaluate_event(ev)

@@ -20,8 +20,11 @@ def dg_home(tmp_path, monkeypatch):
     monkeypatch.setenv("DG_CLAUDE_SETTINGS", str(tmp_path / "claudehome" / "settings.json"))
     monkeypatch.setenv("DG_CLAUDE_PROJECTS", str(tmp_path / "claudehome" / "projects"))
     monkeypatch.setenv("DG_NO_FIRST_RUN", "1")
-    for k in ("DG_REVIEWER_URL", "TELEGRAM_BOT_TOKEN"):
+    for k in ("DG_REVIEWER_URL", "TELEGRAM_BOT_TOKEN", "DEVIN_PROJECT_DIR", "FACTORY_PROJECT_DIR", "DROID_PROJECT_DIR",
+              "DG_ENV", "DG_NO_DOWNLOAD", "DG_PACK_BASE_URL"):
         monkeypatch.delenv(k, raising=False)
+    # Hooks may auto-start a missing daemon; tests must never spawn a real background process.
+    monkeypatch.setattr("dinoguard.daemon.server.start_detached", lambda: 0)
     return home
 
 

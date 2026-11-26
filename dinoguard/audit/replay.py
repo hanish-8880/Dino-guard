@@ -8,6 +8,7 @@ import json
 import os
 import sqlite3
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .. import paths
@@ -65,7 +66,8 @@ def parse_transcript(path: Path) -> list[CanonicalEvent]:
     out: list[CanonicalEvent] = []
     pending: dict[str, CanonicalEvent] = {}
     with open(path, encoding="utf-8", errors="replace") as f:
-        for line in f:
+        for lineno, line in enumerate(f, 1):
+            mark = {"_line": lineno}
             try:
                 obj = json.loads(line)
             except ValueError:
@@ -79,7 +81,8 @@ def parse_transcript(path: Path) -> list[CanonicalEvent]:
             content = msg.get("content")
             if obj.get("type") == "user":
                 if isinstance(content, str) and content.strip():
-                    out.append(CanonicalEvent(event="UserPromptSubmit", harness="claude", session=sess, prompt=content, ts=ts))
+                    out.append(CanonicalEvent(event="UserPromptSubmit", harness="claude", session=sess, prompt=content, ts=ts,
+                                              raw=mark))
                     continue
                 for c in content if isinstance(content, list) else []:
                     if not isinstance(c, dict):
@@ -90,42 +93,76 @@ def parse_transcript(path: Path) -> list[CanonicalEvent]:
                         out.append(CanonicalEvent(event="PostToolUse", harness="claude", session=sess, tool=pre.tool,
                                                   output=text[:16000], output_chars=len(text), ts=ts,
                                                   error=text[:500] if c.get("is_error") else None,
-                                                  tool_use_id=c["tool_use_id"]))
+                                                  tool_use_id=c["tool_use_id"], raw=mark))
                     elif c.get("type") == "text" and not obj.get("isMeta") and c.get("text", "").strip():
                         out.append(CanonicalEvent(event="UserPromptSubmit", harness="claude", session=sess,
-                                                  prompt=c["text"], ts=ts))
+                                                  prompt=c["text"], ts=ts, raw=mark))
             elif obj.get("type") == "assistant":
                 for c in content if isinstance(content, list) else []:
                     if isinstance(c, dict) and c.get("type") == "tool_use":
                         name, inp = map_tool(c.get("name"), c.get("input"))
                         ev = CanonicalEvent(event="PreToolUse", harness="claude", session=sess, tool=make_tool(name, inp),
-                                            ts=ts, tool_use_id=c.get("id"))
+                                            ts=ts, tool_use_id=c.get("id"), raw=mark)
                         pending[c.get("id")] = ev
                         out.append(ev)
     return out
 
 
-def run_audit(conn: sqlite3.Connection, days: int = 30, registry: Registry | None = None) -> dict:
+def _selected(ev, project: str | None, sessions: list[str] | None, env_ids: set[str] | None) -> bool:
+    sid = ev.session_id
+    if sessions and not any(sid == x or sid.startswith(x) for x in sessions):
+        return False
+    if project and project.lower() not in str(ev.session.get("cwd") or "").replace("\\", "/").lower():
+        return False
+    if env_ids is not None and sid not in env_ids:
+        return False
+    return True
+
+
+def run_audit(conn: sqlite3.Connection, days: int = 30, registry: Registry | None = None, goal: str | None = None,
+              project: str | None = None, sessions: list[str] | None = None, env: str | None = None,
+              context: str | None = None, notify: bool = True) -> dict:
+    """Replay history (optionally only a selection) through the built-ins + the agent contract."""
+    from . import contract as contract_mod
+    from .runs import check_recurrence, coverage, record_run
+    started = now_iso()
     reg = registry or Registry().load_builtins()
     reg.policies = [p for p in reg.policies if p.name not in SKIP_IN_AUDIT]
     files = transcript_files(days)
+    env_ids = ({r["id"] for r in rows(conn, "SELECT id FROM sessions WHERE environment=?", (env,))}
+               if env else None)
     hits: list[dict] = []
-    sessions, tool_calls, projects = set(), 0, set()
+    scanned, tool_calls, projects = set(), 0, set()
+    by_project: dict[str, set] = {}
+    review: dict[str, list[str]] = {}
     probe = NullProbe()
     for f in files:
         histories: dict[str, list] = {}
         prompts: dict[str, list] = {}
         for ev in parse_transcript(f):
+            if not _selected(ev, project, sessions, env_ids):
+                continue
             sid = ev.session_id
-            sessions.add(sid)
-            if ev.session.get("cwd"):
-                projects.add(ev.session["cwd"])
+            cwd = ev.session.get("cwd")
+            scanned.add(sid)
+            if cwd:
+                projects.add(cwd)
+                by_project.setdefault(cwd, set()).add(sid)
             items = histories.setdefault(sid, [])
             ps = prompts.setdefault(sid, [])
             if ev.event == "UserPromptSubmit":
                 ps.append(ev.prompt)
+            base = {"session": sid, "ts": ev.ts, "project": cwd or "?", "tool": ev.tool_name, "event": ev.event,
+                    "where": f"{f}:{ev.raw.get('_line', '?')}"}
             if ev.event == "PreToolUse":
                 tool_calls += 1
+                c = contract_mod.load(cwd)
+                if c and (cwd or "?") not in review:
+                    review[cwd or "?"] = contract_mod.review_items(c)
+                for rule in contract_mod.violations(c, ev.tool_name, ev.tool_input):
+                    hits.append({**base, "policy": f"contract:{rule['text']}", "decision": "deny",
+                                 "summary": redact(summarize(ev))[:200],
+                                 "reason": f"contract: should not {rule['text']}"})
             hist = History(items, first_prompt=ps[0] if ps else None, prompts=ps)
             result = evaluate(ev, reg, {}, history=hist, probe=probe, audit=True)
             decs = []
@@ -133,27 +170,47 @@ def run_audit(conn: sqlite3.Connection, days: int = 30, registry: Registry | Non
                 if r.decision.kind == "allow":
                     continue
                 decs.append({"policy": r.policy, "decision": r.decision.kind})
-                hits.append({"policy": r.policy, "decision": r.decision.kind, "session": sid, "ts": ev.ts,
-                             "project": ev.session.get("cwd") or "?", "tool": ev.tool_name, "event": ev.event,
+                hits.append({**base, "policy": r.policy, "decision": r.decision.kind,
                              "summary": redact(summarize(ev))[:200], "reason": (r.decision.reason or "")[:300]})
             items.append({"event": ev.event, "tool_name": ev.tool_name, "input": ev.tool_input, "error": ev.error,
                           "decisions": decs})
     findings = group_findings(hits, reg)
-    audit_id = new_id("aud")
-    scope = {"days": days, "files": len(files), "sessions": len(sessions), "tool_calls": tool_calls,
-             "projects": sorted(projects), "hits": len(hits),
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    cov = coverage(conn, scanned, since, by_project)
+    selection = {"project": project, "sessions": sessions, "env": env}
+    scope = {"days": days, "files": len(files), "sessions": len(scanned), "tool_calls": tool_calls,
+             "projects": sorted(projects), "hits": len(hits), "goal": goal, "selection": selection,
+             "context": _context_text(context), "needs_review": review, "coverage": cov,
              "by_project": _count(hits, "project"), "by_policy": _count(hits, "policy")}
-    existing = conn.execute("SELECT id FROM audits WHERE cadence_days IS NOT NULL LIMIT 1").fetchone()
+    audit_id = new_id("aud")
+    custom = bool(goal or project or sessions or env)
+    existing = None if custom else conn.execute("SELECT id FROM audits WHERE cadence_days IS NOT NULL LIMIT 1").fetchone()
     if existing:
         audit_id = existing["id"]
         conn.execute("UPDATE audits SET last_run=?, scope_json=? WHERE id=?", (now_iso(), json.dumps(scope), audit_id))
     else:
         conn.execute("INSERT INTO audits(id, goal, scope_json, last_run) VALUES (?,?,?,?)",
-                     (audit_id, "local history replay", json.dumps(scope), now_iso()))
+                     (audit_id, goal or "local history replay", json.dumps(scope), now_iso()))
     store_findings(conn, audit_id, findings)
+    res = {"audit_id": audit_id, "files": len(files), "sessions": len(scanned), "tool_calls": tool_calls,
+           "hits": len(hits), "findings": findings, "goal": goal, "coverage": cov, "needs_review": review}
+    res["run_id"] = record_run(conn, audit_id, started, res, cov, goal, selection)
     conn.commit()
-    return {"audit_id": audit_id, "files": len(files), "sessions": len(sessions), "tool_calls": tool_calls,
-            "hits": len(hits), "findings": findings}
+    res["recurred"] = check_recurrence(conn, findings, notify=notify)
+    return res
+
+
+def _context_text(context: str | None) -> str | None:
+    """Reference context: a file path (first 4 KB is kept) or literal text."""
+    if not context:
+        return None
+    p = Path(context)
+    try:
+        if p.is_file():
+            return redact(p.read_text(encoding="utf-8", errors="replace")[:4096])
+    except OSError:
+        pass
+    return redact(context[:4096])
 
 
 def _count(hits, key) -> dict:

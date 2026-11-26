@@ -103,7 +103,9 @@ def test_mcp_protocol(conn):
     assert init["result"]["serverInfo"]["name"] == "dinoguard"
     assert handle(conn, {"jsonrpc": "2.0", "method": "notifications/initialized"}) is None
     tools = handle(conn, {"jsonrpc": "2.0", "id": 2, "method": "tools/list"})["result"]["tools"]
-    assert {t["name"] for t in tools} == {"list_sessions", "get_trace", "query", "list_findings", "explain_decision"}
+    assert {t["name"] for t in tools} == {"list_sessions", "get_trace", "query", "list_findings", "explain_decision",
+                                          "ask",   # read tools; the write tools below need a human yes (Phase 13)
+                                          "ack_insight", "resolve_insight", "set_policy_mode", "run_audit"}
     out = handle(conn, {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
                         "params": {"name": "list_sessions", "arguments": {}}})
     assert json.loads(out["result"]["content"][0]["text"])[0]["id"] == "m1"

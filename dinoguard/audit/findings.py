@@ -18,6 +18,15 @@ MODE_LABEL = {
 }
 
 
+CONTRACT_PREFIX = "contract:"
+
+
+def label(name: str, policy) -> str:
+    if name.startswith(CONTRACT_PREFIX):
+        return f"contract violation: {name[len(CONTRACT_PREFIX):]}"
+    return MODE_LABEL.get(name) or (policy.description if policy else name)
+
+
 def severity(policy, decision: str) -> str:
     cat = policy.category if policy else ""
     if cat == "tokens":
@@ -42,9 +51,10 @@ def group_findings(hits: list[dict], registry) -> list[dict]:
         top = "deny" if "deny" in g["decisions"] else "instruct"
         sev = severity(p, top)
         sessions = sorted({h["session"] for h in g["hits"]})
-        out.append({"policy": name, "failure_mode": MODE_LABEL.get(name) or (p.description if p else name),
+        out.append({"policy": name, "fingerprint": name, "failure_mode": label(name, p),
                     "severity": sev, "count": len(g["hits"]), "session_ids": sessions,
-                    "evidence": [{k: h[k] for k in ("session", "ts", "tool", "summary", "reason", "project")}
+                    "last_ts": max((h["ts"] or "") for h in g["hits"]),
+                    "evidence": [{k: h.get(k) for k in ("session", "ts", "tool", "summary", "reason", "project", "where")}
                                  for h in g["hits"][:5]]})
     out.sort(key=lambda f: (rank[f["severity"]], -f["count"]))
     return out
@@ -55,14 +65,15 @@ def store_findings(conn: sqlite3.Connection, audit_id: str, findings: list[dict]
     for f in findings:
         fid = new_id("fnd")
         f["id"] = fid
+        fp = f.get("fingerprint") or f["policy"]
         conn.execute("INSERT INTO findings(id, audit_id, failure_mode, severity, evidence_json, session_ids, count, "
-                     "created_at) VALUES (?,?,?,?,?,?,?,?)",
+                     "created_at, fingerprint) VALUES (?,?,?,?,?,?,?,?,?)",
                      (fid, audit_id, f"{f['policy']}: {f['failure_mode']}", f["severity"], json.dumps(f["evidence"]),
-                      json.dumps(f["session_ids"]), f["count"], now_iso()))
-        if f["severity"] == "high":
-            exists = conn.execute("SELECT 1 FROM insights WHERE source='audit' AND title=? AND status!='resolved'",
-                                  (f"Audit: {f['failure_mode']}",)).fetchone()
+                      json.dumps(f["session_ids"]), f["count"], now_iso(), fp))
+        if f["severity"] == "high" or f["policy"].startswith(CONTRACT_PREFIX):
+            exists = conn.execute("SELECT 1 FROM insights WHERE source='audit' AND (fingerprint=? OR title=?)",
+                                  (fp, f"Audit: {f['failure_mode']}",)).fetchone()
             if not exists:
-                conn.execute("INSERT INTO insights(id, source, finding_id, status, title, created_at) VALUES "
-                             "(?,?,?,?,?,?)", (new_id("ins"), "audit", fid, "open", f"Audit: {f['failure_mode']}",
-                                               now_iso()))
+                conn.execute("INSERT INTO insights(id, source, finding_id, status, title, created_at, fingerprint) "
+                             "VALUES (?,?,?,?,?,?,?)", (new_id("ins"), "audit", fid, "open",
+                                                        f"Audit: {f['failure_mode']}", now_iso(), fp))

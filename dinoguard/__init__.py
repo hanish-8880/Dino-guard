@@ -13,5 +13,11 @@ def check(tool: str, input: dict | None = None, session_id: str | None = None, *
     return _check(tool, input or {}, session_id=session_id, **kw)
 
 
-__all__ = ["policy", "allow", "instruct", "deny", "ask_human", "check", "Decision", "__version__",
+def trace_session(**kw):
+    """Lifecycle tracer for custom agents (model calls, tools, humans, errors). See dinoguard.tracer."""
+    from .tracer import trace_session as _t
+    return _t(**kw)
+
+
+__all__ = ["policy", "allow", "instruct", "deny", "ask_human", "check", "trace_session", "Decision", "__version__",
            "PROTOCOL_VERSION"]

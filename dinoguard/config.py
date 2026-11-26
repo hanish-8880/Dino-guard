@@ -18,7 +18,19 @@ DEFAULTS: dict[str, Any] = {
     "channels": {},          # name -> channel config (telegram/whatsapp/slack/email/webhook)
     "runner": {"burn_high_per_min": 20000},
     "llm": {"url": None, "model": "gpt-4o-mini"},   # used by authoring / assistant / judge
+    "environment": None,     # session label; DG_ENV wins; default "local"
+    "retention_days": 90,    # 0 = keep forever
+    "redaction": {"extra_patterns": [], "store_outputs": True},
+    "alerts": {"routes": {}},   # severity -> [channel names]
 }
+
+
+def environment(cfg: dict | None = None) -> str:
+    env = os.environ.get("DG_ENV")
+    if env:
+        return env[:64]
+    cfg = cfg if cfg is not None else load()
+    return str(cfg.get("environment") or "local")[:64]
 
 
 def _merge(base: dict, over: dict) -> dict:

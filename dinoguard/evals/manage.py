@@ -125,3 +125,31 @@ def worker_store(conn, name: str, items: list[dict]) -> int:
         store_result(conn, ev, it["session_id"], {k: it.get(k) for k in ("score", "passed", "metric", "unit", "reasoning")})
         n += 1
     return n
+
+
+def rollback(conn, name: str) -> int:
+    """Redeploy the version before the current one, as a new immutable version (CLAUDE.md §17.5)."""
+    cur = _current(conn, name)
+    prev = one(conn, "SELECT * FROM evals WHERE name=? AND version>0 AND version<? ORDER BY version DESC LIMIT 1",
+               (name, cur["version"]))
+    if not prev:
+        raise ValueError(f"{name} has no earlier version to roll back to")
+    v = (one(conn, "SELECT MAX(version) v FROM evals WHERE name=?", (name,))["v"] or 0) + 1
+    conn.execute("UPDATE evals SET enabled=0 WHERE name=?", (name,))
+    conn.execute("INSERT INTO evals(id, name, kind, spec, condition, version, enabled, created_at) VALUES (?,?,?,?,?,?,?,?)",
+                 (new_id("ev"), name, prev["kind"], prev["spec"], prev["condition"], v, 1, now_iso()))
+    conn.commit()
+    return prev["version"]
+
+
+def compare(conn, name: str, by: str) -> list[dict]:
+    """Average score + pass rate of an eval per harness / environment / model."""
+    if by not in ("harness", "environment", "model"):
+        raise ValueError("--by must be harness, environment or model")
+    out = rows(conn, f"SELECT COALESCE(s.{by}, 'unknown') grp, COUNT(*) n, AVG(r.score) avg_score, "
+                     "AVG(r.passed) pass_rate FROM eval_results r JOIN evals e ON e.id=r.eval_id "
+                     f"LEFT JOIN sessions s ON s.id=r.session_id WHERE e.name=? GROUP BY grp ORDER BY n DESC", (name,))
+    for r in out:
+        r["avg_score"] = None if r["avg_score"] is None else round(r["avg_score"], 4)
+        r["pass_rate"] = None if r["pass_rate"] is None else round(r["pass_rate"], 4)
+    return out

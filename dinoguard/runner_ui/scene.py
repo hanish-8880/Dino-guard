@@ -87,7 +87,7 @@ def render(state: str, width: int, tick: int, message: str = "", tip: str = "", 
     if state == "guard_down":
         dino_style = "white on dark_red"
     for i, row in enumerate(sprite):
-        c.put(dino_x, 2 + i, row, dino_style)
+        c.put(dino_x, 5 - art.SPRITE_H + i, row, dino_style)   # feet on the ground row
 
     if state == "sprint":
         for i in range(3):
@@ -95,9 +95,10 @@ def render(state: str, width: int, tick: int, message: str = "", tip: str = "", 
         if tip and w >= 30:
             c.put(dino_x + art.SPRITE_W + 2, 1, ("tip: " + tip)[: w - dino_x - art.SPRITE_W - 3], "dark_orange")
     if state == "wait" and (tick // 5) % 2 == 0:
-        c.put(dino_x + 5, 1, "?", "bold dodger_blue1")
+        c.put(dino_x + art.SPRITE_W + 1, 1, "?", "bold dodger_blue1")
     if state == "review":
-        pos = (tick % max(1, w - 2))
+        x0 = dino_x + art.SPRITE_W + 2
+        pos = x0 + (tick % max(1, w - x0 - 5))
         c.put(pos, 1, "• • •", "medium_purple")
 
     wall_x = dino_x + art.SPRITE_W + 2

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import re
 import shutil
 import tempfile
 from pathlib import Path
@@ -11,29 +10,21 @@ from .. import paths
 from ..store.db import connect, rows
 from ..util import now_iso
 from .manifest import MANIFEST, SUMS, PackError, read_manifest, validate, verify_dir
+from .source import asset_urls, parse_source
 
-GITHUB_API = "https://api.github.com"
 
 
 def parse_ref(ref: str) -> tuple[str, str, str | None]:
-    m = re.fullmatch(r"([\w.-]+)/([\w.-]+)(?:@([\w.\-/]+))?", ref or "")
-    if not m:
-        raise PackError("pack reference must look like owner/repo[@tag]")
-    return m.group(1), m.group(2), m.group(3)
+    """owner, repo, tag for any GitHub-style source (owner/repo[@tag], github:..., release URL)."""
+    src = parse_source(ref)
+    if src.kind != "github":
+        raise PackError("expected owner/repo[@tag]")
+    return src.owner, src.repo, src.tag
 
 
 def _builtin_names() -> set[str]:
     from ..engine.registry import Registry
     return {p.name for p in Registry().load_builtins().policies}
-
-
-def _release(owner: str, repo: str, tag: str | None) -> dict:
-    import httpx
-    url = f"{GITHUB_API}/repos/{owner}/{repo}/releases/" + (f"tags/{tag}" if tag else "latest")
-    r = httpx.get(url, timeout=20, headers={"Accept": "application/vnd.github+json", "User-Agent": "dinoguard"})
-    if r.status_code != 200:
-        raise PackError(f"GitHub release not found ({r.status_code}) for {owner}/{repo}@{tag or 'latest'}")
-    return r.json()
 
 
 def _download(asset_url: str, dest: Path) -> None:
@@ -85,11 +76,26 @@ def install_from_dir(src: Path, tag: str, policies=None, categories=None, select
     return {"publisher": m["publisher"], "name": m["name"], "tag": tag, "digest": digest, "policies": chosen}
 
 
+def strip_pack_prefix(names, pack: str) -> list[str] | None:
+    """Accept `pack:policy` (and `pack/policy`) in --policy/--only selections."""
+    if not names:
+        return names
+    out = []
+    for n in names:
+        for sep in (":", "/"):
+            if n.startswith(pack + sep):
+                n = n[len(pack) + 1:]
+        out.append(n)
+    return out
+
+
 def install_pack(ref: str, policies=None, categories=None, select_all=False, mode="observe") -> dict:
-    owner, repo, tag = parse_ref(ref)
-    rel = _release(owner, repo, tag)
-    tag = rel.get("tag_name") or tag
-    assets = {a["name"]: a["browser_download_url"] for a in rel.get("assets", [])}
+    src = parse_source(ref)
+    if src.kind == "dir":
+        m = read_manifest(src.path)
+        return install_from_dir(src.path, str(m.get("version") or "local"),
+                                strip_pack_prefix(policies, m.get("name", "")), categories, select_all, mode)
+    tag, assets = asset_urls(src)
     if MANIFEST not in assets or SUMS not in assets:
         raise PackError(f"release {tag} lacks {MANIFEST} or {SUMS}")
     with tempfile.TemporaryDirectory(prefix="dg-pack-") as tmp:
@@ -100,21 +106,23 @@ def install_pack(ref: str, policies=None, categories=None, select_all=False, mod
         if m["entry"] not in assets:
             raise PackError(f"release lacks entry file {m['entry']}")
         _download(assets[m["entry"]], t / m["entry"])
-        return install_from_dir(t, tag, policies, categories, select_all, mode)
+        tag = tag or str(m.get("version") or "latest")
+        return install_from_dir(t, tag, strip_pack_prefix(policies, m.get("name", "")), categories, select_all, mode)
 
 
 def show_manifest(ref: str) -> dict:
     """Read only the manifest (never runs pack code)."""
-    owner, repo, tag = parse_ref(ref)
-    for r in rows(connect(), "SELECT manifest_json, tag FROM packs WHERE publisher=? AND name=?", (owner, repo)):
+    src = parse_source(ref)
+    if src.kind == "dir":
+        return {"source": str(src.path), **read_manifest(src.path)}
+    for r in rows(connect(), "SELECT manifest_json, tag FROM packs WHERE publisher=? AND name=?", (src.owner, src.repo)):
         return {"installed_tag": r["tag"], **json.loads(r["manifest_json"])}
-    rel = _release(owner, repo, tag)
-    assets = {a["name"]: a["browser_download_url"] for a in rel.get("assets", [])}
+    tag, assets = asset_urls(src)
     if MANIFEST not in assets:
         raise PackError(f"release lacks {MANIFEST}")
     with tempfile.TemporaryDirectory(prefix="dg-pack-") as tmp:
         _download(assets[MANIFEST], Path(tmp) / MANIFEST)
-        return {"tag": rel.get("tag_name"), **read_manifest(Path(tmp))}
+        return {"tag": tag, **read_manifest(Path(tmp))}
 
 
 def remove_pack(ref: str, conn=None) -> None:

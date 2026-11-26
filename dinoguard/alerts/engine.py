@@ -132,10 +132,18 @@ def preview(conn, aid: str) -> dict:
     return preview_spec(conn, a["trigger_spec"], consecutive=a["consecutive_checks"] or 1)
 
 
+def route_channels(own: list[str] | None, severity: str, cfg: dict) -> list[str]:
+    """An alert's own channels win; otherwise use config.alerts.routes[severity] (CLAUDE.md §17.8)."""
+    if own:
+        return list(own)
+    routes = ((cfg.get("alerts") or {}).get("routes") or {})
+    return list(routes.get(severity) or [])
+
+
 def _notify(a: dict, text: str, cfg: dict) -> tuple[list[str], dict]:
     from .channels import send
     sent, errors = [], {}
-    for ch in a.get("channels") or []:
+    for ch in route_channels(a.get("channels"), a.get("severity") or "warning", cfg):
         try:
             send(ch, text, cfg, subject=f"DinoGuard alert: {a['name']}")
             sent.append(ch)

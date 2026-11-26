@@ -14,6 +14,7 @@ Architecture inspired by FailproofAI. No code reused.
 ```bash
 pipx install dinoguard          # or: pip install -e .  (from this repo)
 dinoguard install               # Claude Code hooks (user scope) + start the fail-closed daemon
+dinoguard notch                 # floating always-on-top dino pill beside your apps (--autostart: open on login)
 dinoguard runner                # dotted dino strip for a split pane
 dinoguard dashboard             # http://127.0.0.1:8030
 dinoguard demo                  # 60 s scripted risky session that shows every runner state
@@ -75,16 +76,33 @@ New custom policies start in **observe** mode. Or let DinoGuard draft one:
 |---|---|
 | Dotted dino runner (terminal / web) | `dinoguard runner`, `dinoguard runner --web` |
 | Dashboard: home, sessions, traces + sub-agent graph, live, policies, audit, insights, evals, alerts, metrics (p50/p95/p99), SQL queries + tiles, settings, Ctrl+J assistant | `dinoguard dashboard` |
-| Local audit of past Claude Code sessions | `dinoguard audit [--schedule 7] [--email you@x]` |
+| Local audit of past Claude Code sessions | `dinoguard audit [--goal "..."] [--project P] [--session ID] [--env E] [--context FILE] [--schedule 7] [--email you@x]` |
+| Agent contract (`should` / `should_not` in `.dinoguard/contract.yaml`), checked by audits and the `contract-should-not` policy | `dinoguard audit`, `dinoguard policies enable contract-should-not` |
+| Audit history + coverage, recurrence check (a fixed failure that comes back reopens its insight and alerts) | `dinoguard audit --history` |
+| Finding → suggested policy, installed in observe mode | `dinoguard audit suggest <finding-id> --install` |
+| Compare two sessions, or groups by model / harness / environment / outcome | `dinoguard compare A B`, `dinoguard compare --by model` |
+| Error groups (fingerprinted), tool + policy analytics | `dinoguard errors`, dashboard Metrics page |
+| Trace export (redacted JSON / JSONL) | `dinoguard export <session> --format jsonl` |
+| Retention + configurable redaction (`retention_days`, `redaction.extra_patterns`, `redaction.store_outputs`) | `dinoguard prune [--days N] [--dry-run]` |
+| Environment labels on sessions | `DG_ENV=staging` |
+| Hook drift warnings + per-harness capability table | `dinoguard doctor`, `dinoguard status` |
 | LLM reviewer for reviewable policies (any OpenAI-compatible endpoint) | `dinoguard reviewer setup --url ... --key-stdin --mode observe` |
 | Phone approval (Telegram / WhatsApp via Twilio or Meta) | `dinoguard approve setup --telegram`, `dinoguard policies enforce phone-approval` |
 | Alerts ("tell me when denies > 5 in 10 minutes") → insights + Slack/email/webhook/Telegram/WhatsApp | `dinoguard alerts new "..." --channel ops` |
-| Evals (safe code expressions, LLM judge, classifier, external worker) + built-in sentiment | `dinoguard eval new|test|deploy|backfill|results` |
+| Evals (safe code expressions, LLM judge, classifier, external worker) + built-in sentiment | `dinoguard eval new|test|deploy|backfill|results|rollback` |
+| Eval from plain words; compare scores by group | `dinoguard eval new cheap --from "cost under $1"`, `dinoguard eval results cheap --by model` |
 | Ask your data (read-only SQL) + MCP server | `dinoguard ask "..."`, `dinoguard mcp` |
-| Policy packs from GitHub releases (SHA256SUMS-pinned; integrity, not a signature) | `dinoguard policies add owner/repo@tag` |
+| Policy packs from GitHub releases or a folder (SHA256SUMS-pinned; integrity, not a signature). `DG_NO_DOWNLOAD=1` = offline, `DG_PACK_BASE_URL` = mirror | `dinoguard policies add owner/repo@tag`, `github:o/r@tag`, a release URL, or `./folder`; `--only pack:policy` |
 | SDK for custom agents + OpenTelemetry ingest | `from dinoguard import check`, `docs/adapters/sdk.md` |
+| Lifecycle tracer (model calls, tools, humans, errors, pause/resume) + framework helpers (LangChain, LlamaIndex, CrewAI, Pydantic AI, Deep Agents) | `with dinoguard.trace_session(...) as t:`, `dinoguard.frameworks` |
+| Any language over HTTP; JS/TS client with no dependencies | `POST /api/v1/events`, `sdk/ts/dinoguard.mjs` |
+| More harnesses: Devin, Factory Droid, Deep Agents Code, Antigravity, Pi, OpenClaw, Hermes | `dinoguard install --harness devin|droid|deepagents|antigravity|pi|openclaw|hermes`, `docs/adapters/` |
+| MCP write tools that need your yes first; MCP over local HTTP | `dinoguard mcp --http`, approve with `dinoguard approve answer <code> yes` |
+| Undo hint: git checkpoint before allowed risky actions | `dinoguard undo [<event-id>]` |
 
 All data stays in `~/.dinoguard/` (SQLite in WAL mode plus `stream.jsonl`). Secrets are redacted before storage.
+Stored data older than `retention_days` (default 90) is pruned once a day by the daemon; set it to `0` to keep
+everything. There is no cap on runs, evals or audits: it is your laptop.
 Network calls happen only for the optional reviewer/LLM features, alerts, approvals, and pack downloads.
 
 ## Development

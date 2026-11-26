@@ -51,7 +51,8 @@ DG.pages.metrics = async (v) => {
   v.innerHTML = `<h1>Metrics <span class="muted small">last ${m.hours / 24} days</span></h1>
   <h2>Latency (ms)</h2>${table([{ label: "what", key: "name" }, { label: "samples", key: "n" }, { label: "p50", get: r => r.p50 ?? "—" }, { label: "p95", get: r => r.p95 ?? "—" }, { label: "p99", get: r => r.p99 ?? "—" }], latRows)}
   <div class="cols"><div id="cost"></div><div id="ctx"></div></div>
-  <h2>Tool error rates</h2>${table([{ label: "tool", key: "tool_name" }, { label: "calls", key: "n" }, { label: "errors", key: "errors" }, { label: "rate", get: r => (r.rate * 100).toFixed(1) + "%" }], m.error_rates)}`;
+  <div id="analytics"></div>`;
+  metricsAnalytics(v.querySelector("#analytics"));
   hBars(v.querySelector("#cost"), m.cost_per_model.map(r => ({ label: r.model || "?", value: r.cost || 0, fmt: money })), { title: "Cost per model" });
   hBars(v.querySelector("#ctx"), m.context_usage.slice(0, 10).map(r => ({ label: r.session_id.slice(0, 12), value: r.ctx || 0 })), { title: "Peak context tokens per session", color: "var(--series-3)" });
 };

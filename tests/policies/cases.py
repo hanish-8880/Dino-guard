@@ -210,6 +210,22 @@ CASES = {
         "allow": ["terraform plan", "git push origin feat"]},
 }
 
+CONTRACT = {"should_not": [{"text": "touch the payments folder", "paths": ["payments/"]},
+                           {"text": "deploy anything", "commands": [r"\b(kubectl|terraform)\s+apply\b"]},
+                           {"text": "browse the web", "tools": ["WebFetch"]}]}
+CASES["contract-should-not"] = {
+    "fire": [{"tool": "Edit", "input": {"file_path": "src/payments/charge.py", "old_string": "a", "new_string": "b"},
+              "params": {"contract": CONTRACT}},
+             {"cmd": "terraform apply -auto-approve", "params": {"contract": CONTRACT}},
+             {"cmd": "cat payments/keys.txt", "params": {"contract": CONTRACT}},
+             {"tool": "WebFetch", "input": {"url": "https://x.dev"}, "params": {"contract": CONTRACT}}],
+    "allow": [{"tool": "Edit", "input": {"file_path": "src/login.py", "old_string": "a", "new_string": "b"},
+               "params": {"contract": CONTRACT}},
+              {"cmd": "terraform plan", "params": {"contract": CONTRACT}},
+              {"cmd": "ls", "params": {"contract": {"should_not": ["be rude"]}}},
+              {"tool": "Read", "input": {"file_path": "docs/payments-faq.md"}, "params": {"contract": CONTRACT}}],
+}
+
 INSTRUCT_POLICIES = {"secret-in-output", "warn-destructive-sql", "warn-schema-change", "use-repo-package-manager",
                      "warn-large-write", "warn-background-process", "goal-drift", "intent-complete",
                      "token-repeat-read", "token-big-output", "token-context-high", "token-model-fit"}

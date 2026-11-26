@@ -23,6 +23,12 @@ class Adapter(ABC):
     name: str = "base"
     #: canonical events this harness can block on (documented in docs/adapters/<name>.md)
     blocking_events: frozenset[str] = frozenset()
+    #: harness version / docs date the adapter was checked against (see docs/adapters/<name>.md)
+    VERIFIED_VERSION: str | None = None
+    #: native tool names that deliberately map to canonical "Other"; None = don't track tool drift
+    known_native_tools: frozenset[str] | None = None
+    #: plain-words capability notes shown by `dinoguard status`
+    observe_only_note: str = "every other event is observe-only"
 
     @abstractmethod
     def to_canonical(self, raw: dict[str, Any]) -> CanonicalEvent: ...

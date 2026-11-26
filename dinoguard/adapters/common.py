@@ -17,9 +17,21 @@ ALIASES = {
     "web_fetch": "WebFetch", "webfetch": "WebFetch", "fetch": "WebFetch",
     "google_web_search": "WebSearch", "web_search": "WebSearch", "websearch": "WebSearch",
     "task": "Task", "agent": "Task", "subagent": "Task",
+    "fetchurl": "WebFetch", "read_url_content": "WebFetch", "search_web": "WebSearch", "web_extract": "WebFetch",
+    "notebook_read": "Read", "notebook_edit": "Edit", "search_files": "Grep",
+    "run_subagent": "Task", "invoke_subagent": "Task", "delegate_task": "Task",
 }
 _PATH_KEYS = ("file_path", "path", "absolute_path", "filePath", "filename", "file", "target_file")
 _CMD_KEYS = ("command", "cmd", "script", "commandLine")
+
+
+def patch_path(patch: str) -> str:
+    """First file named in an apply_patch / unified-diff text ("" if none)."""
+    for line in (patch or "").splitlines():
+        for marker in ("*** Update File: ", "*** Add File: ", "*** Delete File: ", "+++ b/"):
+            if line.startswith(marker):
+                return line[len(marker):].strip()
+    return ""
 
 
 def parse_args(v) -> dict[str, Any]:
@@ -49,7 +61,9 @@ def canonical_input(tool: str, inp: dict[str, Any]) -> dict[str, Any]:
         if tool == "Edit":
             out["old_string"] = str(inp.get("old_string") or inp.get("old_str") or inp.get("oldString") or "")
             out["new_string"] = str(inp.get("new_string") or inp.get("new_str") or inp.get("newString")
-                                    or inp.get("patch") or inp.get("input") or "")
+                                    or inp.get("patch") or inp.get("patchText") or inp.get("input") or "")
+            if not out["file_path"]:
+                out["file_path"] = patch_path(out["new_string"])
     elif tool in ("Grep", "Glob"):
         out["pattern"] = str(inp.get("pattern") or inp.get("query") or inp.get("glob") or "")
         if any(inp.get(k) for k in _PATH_KEYS + ("dir_path", "directory")):

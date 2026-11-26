@@ -15,6 +15,7 @@ EVENT_MAP = {"BeforeTool": "PreToolUse", "AfterTool": "PostToolUse", "BeforeAgen
 
 class GeminiAdapter(Adapter):
     name = "gemini"
+    VERIFIED_VERSION = "docs read 2026-11-25 (geminicli.com/docs/hooks)"
     blocking_events = frozenset({"PreToolUse", "UserPromptSubmit"})
 
     def to_canonical(self, raw: dict) -> CanonicalEvent:

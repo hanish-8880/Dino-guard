@@ -18,6 +18,7 @@ EVENT_MAP = {"preToolUse": "PreToolUse", "postToolUse": "PostToolUse", "postTool
 
 class CopilotAdapter(Adapter):
     name = "copilot"
+    VERIFIED_VERSION = "docs read 2026-11-25 (GitHub Copilot hooks reference)"
     blocking_events = frozenset({"PreToolUse"})
 
     def to_canonical(self, raw: dict) -> CanonicalEvent:
