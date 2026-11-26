@@ -84,7 +84,7 @@ def test_transcript_incremental(conn, tmp_path):
     assert ingest(conn, "s", str(tp)) == 1
     st = stats(conn, "s", "2026-11-25T10:00:40.000Z")
     assert st.tokens_in == 3000 and st.tokens_out == 500 and st.cache_read == 11000
-    assert st.context_tokens == 8000 and st.context_window == 200000
+    assert st.context_tokens == 8000 and st.context_window == 1_000_000      # Sonnet 5.5: 1M window
     assert st.cost_usd > 0 and st.burn_per_min == 3500
     assert st.model == "claude-sonnet-5-5"
 
@@ -103,13 +103,13 @@ def test_tokens_reach_policies(dg_home, tmp_path):
     from dinoguard.hook.client import run
     config.set_policy("token-context-high", enabled=True, mode="enforce")
     tp = tmp_path / "t.jsonl"
-    tp.write_text(_assistant("m1", "claude-sonnet-5-5", 10, 10, 170000) + "\n")
+    tp.write_text(_assistant("m1", "claude-sonnet-5-5", 10, 10, 850000) + "\n")     # 85% of a 1M window
     code, out, err = run("claude", json.dumps({"session_id": "tk", "cwd": "/w", "transcript_path": str(tp),
                                                "hook_event_name": "PreToolUse", "tool_name": "Bash",
                                                "tool_input": {"command": "ls"}}))
     assert "compact" in json.loads(out)["hookSpecificOutput"]["additionalContext"]
     rec = json.loads((dg_home / "stream.jsonl").read_text().splitlines()[-1])
-    assert rec["tokens"]["context_tokens"] == 170010
+    assert rec["tokens"]["context_tokens"] == 850010
 
 
 def test_demo_runs_headless(monkeypatch, tmp_path):

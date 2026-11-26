@@ -76,3 +76,43 @@ def test_stop_hook_not_trapped_when_down():
     _enable()
     code, out, err = run("claude", json.dumps({"session_id": "x", "hook_event_name": "Stop"}))
     assert code == 0
+
+
+# ---- auto-start of a daemon that isn't running (2026-11-26) ---------------------------------------------------
+
+def test_hook_starts_a_missing_daemon_then_evaluates(monkeypatch):
+    _enable()
+    started = {}
+
+    def fake_start():
+        d = Daemon(Service()).bind()
+        d.serve_in_thread()
+        started["d"] = d
+        return 1
+    monkeypatch.setattr("dinoguard.daemon.server.start_detached", fake_start)
+    try:
+        code, out, err = run("claude", pre("rm -rf src"))
+        assert json.loads(out)["hookSpecificOutput"]["permissionDecision"] == "deny"   # evaluated by the daemon
+        assert started and "no-rm-rf" in out
+        code, out, err = run("claude", pre("ls"))
+        assert code == 0 and out == ""
+    finally:
+        if "d" in started:
+            started["d"].shutdown()
+
+
+def test_failed_autostart_still_denies():
+    _enable()                                   # conftest's start_detached does nothing
+    code, out, err = run("claude", pre("ls"))
+    assert code == 2 and "daemon" in err
+
+
+def test_deliberate_stop_and_opt_out_are_respected(dg_home, monkeypatch):
+    calls = []
+    monkeypatch.setattr("dinoguard.daemon.server.start_detached", lambda: calls.append(1) or 0)
+    _enable()
+    (dg_home / "daemon.stopped").write_text("x")
+    assert run("claude", pre("ls"))[0] == 2 and calls == []
+    (dg_home / "daemon.stopped").unlink()
+    config.update(lambda c: c["daemon"].update(autostart=False))
+    assert run("claude", pre("ls"))[0] == 2 and calls == []

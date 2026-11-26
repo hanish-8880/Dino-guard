@@ -146,8 +146,9 @@ def test_opencode_and_goose_and_sdk():
     _, o, _ = _out("opencode", {"event": "tool.execute.before", "tool": "bash", "args": {"command": "rm -rf x"},
                                 "sessionID": "o1", "cwd": "/w"})
     assert o["decision"] == "deny"
-    _, o, _ = _out("goose", {"event": "PreToolUse", "tool": "Bash", "input": {"command": "ls"}, "session_id": "z"})
-    assert o["decision"] == "allow"
+    _, o, _ = _out("goose", {"event": "PreToolUse", "tool_name": "developer__shell",
+                             "tool_input": {"command": "rm -rf x"}, "session_id": "z", "working_dir": "/w"})
+    assert o["decision"] == "block"            # Goose has real hooks now (2026-11-26); see test_more_harnesses
     _, o, _ = _out("sdk", {"tool": "write_file", "input": {"path": "x.pem", "content": "-----BEGIN PRIVATE KEY-----\nabc"}})
     assert o["decision"] == "deny"
 

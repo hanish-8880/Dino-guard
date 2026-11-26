@@ -49,9 +49,23 @@ def map_tool(name: str | None, inp: dict[str, Any] | None) -> tuple[str, dict[st
 
 class ClaudeCodeAdapter(Adapter):
     name = "claude"
+    VERIFIED_VERSION = "2.x (hooks reference read 2026-11-25)"
+    #: native tools that intentionally map to canonical "Other" (anything else there is hook drift)
+    known_native_tools = frozenset({
+        "TodoWrite", "TodoRead", "Skill", "ToolSearch", "ExitPlanMode", "EnterPlanMode", "AskUserQuestion",
+        "KillShell", "KillBash", "BashOutput", "TaskOutput", "TaskStop", "TaskCreate", "TaskGet", "TaskList",
+        "TaskUpdate", "Monitor", "SlashCommand", "LS", "NotebookRead", "ListMcpResourcesTool",
+        "ReadMcpResourceTool", "SendMessage", "EnterWorktree", "ExitWorktree", "ScheduleWakeup", "CronCreate",
+        "CronDelete", "CronList", "PushNotification", "RemoteTrigger", "ListAgents", "Artifact",
+        "ArtifactComments", "ArtifactData", "ReportFindings", "DesignSync", "SendToProject",
+        "SendToProjectContext", "McpTaskCheck"})
     blocking_events = frozenset({"PreToolUse", "PermissionRequest", "UserPromptSubmit", "UserPromptExpansion",
                                  "Stop", "SubagentStop", "PreCompact", "PostToolBatch", "TaskCreated",
                                  "TaskCompleted", "ConfigChange", "TeammateIdle"})
+
+    def map_tool(self, name, inp) -> tuple[str, dict[str, Any]]:
+        """Claude-style harnesses (Devin, Droid, Deep Agents Code) override this with their own tool names."""
+        return map_tool(name, inp)
 
     def to_canonical(self, raw: dict[str, Any]) -> CanonicalEvent:
         ev_name = str(raw.get("hook_event_name") or "Notification")
@@ -61,7 +75,7 @@ class ClaudeCodeAdapter(Adapter):
             ev_name_canon = ev_name
         tool = None
         if raw.get("tool_name"):
-            cname, cinp = map_tool(raw.get("tool_name"), raw.get("tool_input"))
+            cname, cinp = self.map_tool(raw.get("tool_name"), raw.get("tool_input"))
             tool = make_tool(cname, cinp)
             tool["native_name"] = raw.get("tool_name")
         output, n = (None, 0)
@@ -79,7 +93,7 @@ class ClaudeCodeAdapter(Adapter):
             error = str(raw.get("error") or "tool failed")
         extra = {k: v for k, v in raw.items() if k not in _COMMON}
         return CanonicalEvent(
-            event=ev_name_canon, harness="claude", harness_version=raw.get("version"),
+            event=ev_name_canon, harness=self.name, harness_version=raw.get("version"),
             session={"id": raw.get("session_id") or "unknown", "cwd": raw.get("cwd"),
                      "transcript_path": raw.get("transcript_path"), "permission_mode": raw.get("permission_mode"),
                      "agent_type": raw.get("agent_type")},

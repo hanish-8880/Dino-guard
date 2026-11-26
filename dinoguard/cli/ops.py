@@ -33,6 +33,30 @@ def cmd_runner(args) -> int:
     return run(fps=args.fps)
 
 
+def cmd_notch(args) -> int:
+    from ..runner_ui import notch_model, notch_os
+    if args.no_autostart:
+        removed = notch_os.disable_autostart()
+        console.print("✔ notch will no longer open on login" if removed else "notch was not set to open on login")
+        return 0
+    if args.corner:
+        notch_model.save_pos({"corner": args.corner})
+    if args.autostart:
+        console.print(f"✔ notch opens on login: {notch_os.enable_autostart()}")
+    if args.foreground:
+        from ..runner_ui.notch import run
+        return run(fps=args.fps, max_seconds=args.seconds)
+    probe = notch_os.single_instance()
+    if probe is None:
+        console.print("dino notch is already running (right-click it → Quit to close).")
+        return 0
+    probe.close()
+    pid = notch_os.spawn_detached()
+    console.print(f"✔ dino notch started (pid {pid}). Drag it anywhere; right-click for corner / dashboard / "
+                  "hide / quit.")
+    return 0
+
+
 def cmd_dashboard(args) -> int:
     from ..dashboard.app import serve
     return serve(port=args.port, open_browser=not args.no_open)
@@ -41,6 +65,14 @@ def cmd_dashboard(args) -> int:
 def cmd_audit(args) -> int:
     from ..audit import schedule
     from ..store import db
+    from . import data
+    if args.history or args.action == "history":
+        return data.audit_history()
+    if args.action == "suggest":
+        if not args.finding:
+            console.print("usage: dinoguard audit suggest <finding-id> [--install]")
+            return 2
+        return data.audit_suggest(args.finding, args.install)
     conn = db.connect()
     if args.status:
         for a in schedule.list_audits(conn):
@@ -58,15 +90,31 @@ def cmd_audit(args) -> int:
         schedule.set_schedule(conn, args.schedule, args.email)
         console.print(f"[green]✔[/] audit scheduled every {args.schedule} days (runs from the daemon)")
     from ..audit.replay import run_audit
-    res = run_audit(conn, days=args.days)
+    res = run_audit(conn, days=args.days, goal=args.goal, project=args.project, sessions=args.session,
+                    env=args.env, context=args.context)
+    if res.get("goal"):
+        console.print(f"[bold]Goal:[/] {res['goal']}")
     console.print(f"[bold]Audit[/] scanned {res['sessions']} sessions, {res['tool_calls']} tool calls "
                   f"from {res['files']} transcript files.")
+    cov = res.get("coverage") or {}
+    console.print(f"Coverage: {cov.get('store_sessions_covered', 0)} of {cov.get('store_sessions', 0)} sessions in "
+                  "the DinoGuard store were replayed.")
     console.print("[dim]Findings are evidence for review, not proof.[/]")
-    t = Table("severity", "failure mode", "count", "sessions", "example")
+    t = Table("finding id", "severity", "failure mode", "count", "sessions", "example")
     for f in res["findings"]:
         ex = (f["evidence"][0]["summary"] if f["evidence"] else "")[:60]
-        t.add_row(f["severity"], f["failure_mode"], str(f["count"]), str(len(f["session_ids"])), ex)
+        t.add_row(f.get("id", ""), f["severity"], f["failure_mode"], str(f["count"]), str(len(f["session_ids"])), ex)
     console.print(t)
+    for f in res["findings"][:3]:
+        if f["evidence"] and f["evidence"][0].get("where"):
+            console.print(f"[dim]  {f['policy']}: {f['evidence'][0]['where']}[/]")
+    for proj, items in (res.get("needs_review") or {}).items():
+        for it in items:
+            console.print(f"[yellow]needs human review[/] ({proj}): {it}")
+    for r in res.get("recurred") or []:
+        console.print(f"[red]recurred[/] {r['title']} (insight {r['insight']} reopened)")
+    if res["findings"]:
+        console.print("Draft a policy from a finding: dinoguard audit suggest <finding-id> --install")
     if args.email:
         from ..audit.schedule import email_report
         email_report(res, args.email)
@@ -78,7 +126,13 @@ def cmd_eval(args) -> int:
     from ..store import db
     conn = db.connect()
     if args.action == "new":
-        e = manage.new(conn, args.name, args.kind, args.spec or "", args.condition)
+        spec = args.spec or ""
+        if args.from_text and not spec:
+            from ..evals.draft import draft_spec
+            d = draft_spec(args.from_text)
+            spec = d["spec"]
+            console.print(f"[dim]drafted ({d['method']}):[/] {spec}")
+        e = manage.new(conn, args.name, args.kind, spec, args.condition)
         console.print(f"[green]✔[/] eval draft {e['name']} ({e['kind']}). Next: dinoguard eval test {e['name']}")
     elif args.action == "test":
         for r in manage.test(conn, args.name, limit=args.limit):
@@ -89,6 +143,14 @@ def cmd_eval(args) -> int:
     elif args.action == "backfill":
         n = manage.backfill(conn, args.name, limit=args.limit)
         console.print(f"[green]✔[/] scored {n} past sessions")
+    elif args.action == "rollback":
+        v = manage.rollback(conn, args.name)
+        console.print(f"[green]✔[/] {args.name} rolled back to the code of v{v}")
+    elif args.action == "results" and args.by:
+        t = Table(args.by, "results", "avg score", "pass rate")
+        for r in manage.compare(conn, args.name, args.by):
+            t.add_row(str(r["grp"]), str(r["n"]), str(r["avg_score"]), str(r["pass_rate"]))
+        console.print(t)
     elif args.action == "results":
         for r in manage.results(conn, args.name, limit=args.limit):
             console.print(f" {r['created_at']} {r['session_id'][:12]} v{r['version']} score={r['score']} "
@@ -183,6 +245,8 @@ def cmd_ask(args) -> int:
     for r in res["rows"][:50]:
         t.add_row(*[str(x) for x in r])
     console.print(t)
+    for note in res.get("notes") or []:
+        console.print(f"[yellow]•[/] {note}")
     if res.get("session_ids"):
         console.print("sessions: " + ", ".join(res["session_ids"][:10]))
     console.print("[dim]Answers are investigation aids; check the SQL.[/]")
@@ -190,6 +254,9 @@ def cmd_ask(args) -> int:
 
 
 def cmd_mcp(args) -> int:
+    if args.http:
+        from ..assistant.mcp_http import serve_http
+        return serve_http(args.port)
     from ..assistant.mcp_server import serve_stdio
     return serve_stdio()
 

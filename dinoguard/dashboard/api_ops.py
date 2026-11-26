@@ -95,7 +95,8 @@ def update_insight(iid: str, body: dict = Body(...), conn=Depends(get_conn)):
     if not r:
         raise HTTPException(404)
     if body.get("status") in ("open", "ack", "assigned", "resolved"):
-        conn.execute("UPDATE insights SET status=? WHERE id=?", (body["status"], iid))
+        conn.execute("UPDATE insights SET status=?, resolved_at=CASE WHEN ?='resolved' THEN ? ELSE NULL END "
+                     "WHERE id=?", (body["status"], body["status"], now_iso(), iid))
     if "owner" in body:
         conn.execute("UPDATE insights SET owner=?, status=CASE WHEN status='open' THEN 'assigned' ELSE status END "
                      "WHERE id=?", (body["owner"], iid))
@@ -119,7 +120,8 @@ def findings(conn=Depends(get_conn)):
 @router.post("/audit/run", dependencies=W)
 def run_audit(body: dict = Body(default={}), conn=Depends(get_conn)):
     from ..audit.replay import run_audit as _run
-    return _run(conn, days=int(body.get("days", 30)))
+    return _run(conn, days=int(body.get("days", 30)), goal=body.get("goal"), project=body.get("project"),
+                sessions=body.get("sessions") or None, env=body.get("env"), context=body.get("context"))
 
 
 @router.get("/audit/overview")
@@ -137,9 +139,25 @@ def draft_policy(body: dict = Body(...)):
 
 
 @router.post("/findings/{fid}/draft", dependencies=W)
-def draft_from_finding(fid: str, conn=Depends(get_conn)):
+def draft_from_finding(fid: str, body: dict = Body(default={}), conn=Depends(get_conn)):
+    """Draft a policy from a finding; with {"install": true} also publish + deploy it in observe mode."""
     from ..authoring.draft import draft_from_finding as _d
-    return _d(conn, fid)
+    try:
+        d = _d(conn, fid)
+    except KeyError as e:
+        raise HTTPException(404, f"no finding {e}") from e
+    if body.get("install"):
+        from ..deploy import versions
+        v = versions.publish(d["name"], notes=f"suggested from finding {fid}", conn=conn)
+        versions.deploy(d["name"], v, "observe", conn)
+        d.update({"installed": True, "version": v, "mode": "observe"})
+    return d
+
+
+@router.get("/audit/runs")
+def audit_runs(conn=Depends(get_conn)):
+    from ..audit.runs import history
+    return history(conn)
 
 
 # ---- evals ---------------------------------------------------------------
@@ -199,6 +217,24 @@ def ask(body: dict = Body(...), conn=Depends(get_conn)):
     res = _ask(conn, str(body.get("question", "")))
     res["chat_id"] = record(conn, body.get("chat_id"), str(body.get("question", "")), res)
     return res
+
+
+@router.post("/v1/events", dependencies=W)
+def sdk_events(body: dict | list = Body(...)):
+    """Agents in any language send SDK wire-format events (one, a list, or {"events": [...]}); each is evaluated
+    like a hook event and the decisions come back in order (CLAUDE.md §17.9)."""
+    from ..adapters.sdk import SDKAdapter, evaluate_event
+    items = body.get("events") if isinstance(body, dict) and "events" in body else body
+    items = items if isinstance(items, list) else [items]
+    if len(items) > 500:
+        raise HTTPException(413, "at most 500 events per request")
+    out = []
+    for raw in items:
+        if not isinstance(raw, dict):
+            raise HTTPException(400, "each event must be a JSON object")
+        d = evaluate_event(SDKAdapter().to_canonical(raw))
+        out.append({"decision": d.kind, "reason": d.reason, "policy": d.policy})
+    return {"decisions": out}
 
 
 @router.post("/v1/traces")

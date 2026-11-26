@@ -22,6 +22,7 @@ PERMISSION_EVENTS = {"preToolUse", "beforeShellExecution", "beforeMCPExecution",
 
 class CursorAdapter(Adapter):
     name = "cursor"
+    VERIFIED_VERSION = "docs read 2026-11-25 (cursor.com/docs/agent/hooks)"
     blocking_events = frozenset({"PreToolUse", "UserPromptSubmit", "Stop", "SubagentStop"})
 
     def _tool(self, ev: str, raw: dict):

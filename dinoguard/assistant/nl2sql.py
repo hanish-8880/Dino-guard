@@ -81,7 +81,34 @@ def _session_ids(cols: list[str], out: list[list]) -> list[str]:
     return ids[:50]
 
 
+_AUDIT_Q = re.compile(r"(?i)\bwhy\b.*\b(fail\w*|break\w*|wrong|stuck|loop\w*|block\w*|den\w*)\b|root cause|"
+                      r"keep(s)? (failing|breaking|looping)|what (goes|went|is going) wrong|biggest (problem|issue)s?")
+
+
+def audit_answer(conn: sqlite3.Connection, question: str) -> dict:
+    """Plain-words audit questions answer from the latest findings + error groups (CLAUDE.md §17.11)."""
+    from ..analytics.errors import groups
+    sql = ("SELECT failure_mode, severity, count, session_ids FROM findings WHERE audit_id = (SELECT audit_id FROM "
+           "findings ORDER BY created_at DESC LIMIT 1) ORDER BY CASE severity WHEN 'high' THEN 0 WHEN 'medium' THEN 1 "
+           "ELSE 2 END, count DESC LIMIT 10")
+    cols, out = safe_select(conn, sql, timeout_s=5.0, max_rows=50)
+    notes = []
+    if not out:
+        notes.append("No audit findings yet: run `dinoguard audit` (or ask an agent to use the MCP run_audit tool, "
+                     "which needs your approval).")
+    for f in out[:3]:
+        notes.append(f"{f[0]} ({f[1]}, {f[2]} hits)")
+    for g in groups(conn, days=7, limit=3):
+        notes.append(f"repeated error x{g['count']} in {len(g['sessions'])} session(s): {g['pattern'][:100]}")
+    notes.append("Findings are evidence for review, not proof.")
+    ids = _session_ids(cols, [[str(r[3] or "").strip("[]").replace('"', "") if i == 3 else v
+                               for i, v in enumerate(r)] for r in out])
+    return {"sql": sql, "method": "audit", "columns": cols, "rows": out, "session_ids": ids, "notes": notes}
+
+
 def ask(conn: sqlite3.Connection, question: str) -> dict:
+    if _AUDIT_Q.search(question or ""):
+        return audit_answer(conn, question)
     method = "template"
     sql = None
     try:

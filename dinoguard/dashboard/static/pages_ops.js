@@ -2,23 +2,36 @@
 DG.pages.audit = async (v) => {
   const o = await api("/audit/overview");
   v.innerHTML = `<h1>Audit</h1><div class="note small">Replays local agent history through the built-in policies. Findings are <b>evidence for review, not proof</b>.</div>
-  <div class="row"><button id="run" class="primary">Run audit now (30 days)</button><span id="st" class="muted small"></span></div>
+  <form class="filters" id="af"><input name="goal" placeholder="goal (what are you looking for?)" size="30"><input name="project" placeholder="project contains" size="14">
+    <input name="env" placeholder="environment" size="10"><input name="days" type="number" value="30" style="width:5em"> days
+    <button id="run" class="primary">Run audit now</button><span id="st" class="muted small"></span></form>
+  <div class="note small">Contract: put <span class="mono">should</span> / <span class="mono">should_not</span> rules in <span class="mono">.dinoguard/contract.yaml</span> in a project; audits check them.</div>
   <div class="grid">${tile("Sessions", fmtNum(o.sessions))}${tile("Tool calls", fmtNum(o.tool_calls))}${tile("Projects", fmtNum(o.projects.length))}${tile("Policy hits", fmtNum(o.policy_hits))}</div>
   <div class="cols"><div id="proj"></div><div id="pol"></div></div>
-  <h2>Frequent findings</h2><div id="find"></div>`;
+  <h2>Frequent findings</h2><div id="find"></div><h2>Audit runs</h2><div id="runs"></div>`;
+  const showRuns = async () => { v.querySelector("#runs").innerHTML = table([{ label: "started", get: r => fmtTs(r.started_at) },
+    { label: "goal", get: r => r.goal || "local history replay" }, { label: "sessions", key: "sessions" }, { label: "tool calls", key: "tool_calls" },
+    { label: "findings", key: "findings" }, { label: "coverage", get: r => `${r.coverage.store_sessions_covered || 0}/${r.coverage.store_sessions || 0} stored sessions` }],
+    await api("/audit/runs"), { empty: "No audit runs yet." }); };
+  showRuns();
   hBars(v.querySelector("#proj"), o.projects.slice(0, 10).map(p => ({ label: p.project, value: p.hits })), { title: "Policy hits by project" });
   hBars(v.querySelector("#pol"), o.by_policy.slice(0, 10).map(p => ({ label: p.policy, value: p.n })), { title: "Hits by policy", color: "var(--series-2)" });
   const showFindings = (rows) => { const el = v.querySelector("#find");
     el.innerHTML = table([{ label: "severity", html: r => badge(r.severity === "high" ? "deny" : r.severity === "medium" ? "instruct" : "observe", r.severity) },
       { label: "failure mode", key: "failure_mode" }, { label: "count", key: "count" }, { label: "sessions", get: r => r.session_ids.length },
       { label: "example", get: r => (r.evidence[0] || {}).summary || "" },
-      { label: "", html: r => `<button data-f="${r.id}">Draft a policy</button>` }], rows, { empty: "No findings yet. Run an audit." });
+      { label: "evidence", html: r => `<span class="mono small">${esc(((r.evidence[0] || {}).where || "").split(/[\\/]/).slice(-2).join("/"))}</span>` },
+      { label: "", html: r => `<button data-f="${r.id}">Draft a policy</button> <button data-i="${r.id}">Install in observe</button>` }], rows, { empty: "No findings yet. Run an audit." });
     el.querySelectorAll("[data-f]").forEach(b => b.onclick = async () => { const d = await post(`/findings/${b.dataset.f}/draft`);
-      alert(`Drafted ${d.name} (${d.method}) at ${d.path}.\nTest it: dinoguard policy test ${d.name}`); }); };
+      alert(`Drafted ${d.name} (${d.method}) at ${d.path}.\nTest it: dinoguard policy test ${d.name}`); });
+    el.querySelectorAll("[data-i]").forEach(b => b.onclick = async () => { const d = await post(`/findings/${b.dataset.i}/draft`, { install: true });
+      alert(`Installed ${d.name} v${d.version} in observe mode. It records what it would block; promote it on the Policies page.`); }); };
   showFindings(await api("/findings"));
-  v.querySelector("#run").onclick = async () => { v.querySelector("#st").textContent = "running…";
-    const r = await post("/audit/run", { days: 30 }); v.querySelector("#st").textContent = `scanned ${r.sessions} sessions, ${r.tool_calls} tool calls`;
-    showFindings(await api("/findings")); };
+  v.querySelector("#af").onsubmit = async (e) => { e.preventDefault(); v.querySelector("#st").textContent = "running…";
+    const f = Object.fromEntries([...new FormData(e.target)].filter(([, x]) => x)); f.days = Number(f.days || 30);
+    const r = await post("/audit/run", f);
+    v.querySelector("#st").textContent = `scanned ${r.sessions} sessions, ${r.tool_calls} tool calls` + (r.recurred.length ? ` · ${r.recurred.length} fixed failure(s) came back` : "");
+    showFindings(await api("/findings")); showRuns(); };
 };
 
 DG.pages.insights = async (v) => {

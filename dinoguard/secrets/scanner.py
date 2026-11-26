@@ -26,6 +26,50 @@ _ASSIGN = re.compile(
 _PLACEHOLDER = re.compile(r"(?i)(x{6,}|your[_-]|example|placeholder|changeme|dummy|<[^>]+>|\$\{|\$[A-Z_]|process\.env|os\.environ)")
 
 
+_extra_cache: dict = {"key": None, "checked": 0.0, "patterns": []}
+
+
+def _compile_extra(items) -> list[tuple[str, re.Pattern]]:
+    out = []
+    for it in items or []:
+        if isinstance(it, str):
+            it = {"name": "custom", "pattern": it}
+        if not isinstance(it, dict) or not it.get("pattern"):
+            continue
+        try:
+            out.append((str(it.get("name") or "custom")[:40], re.compile(str(it["pattern"]))))
+        except re.error:
+            continue        # a bad user pattern never breaks redaction of the built-in shapes
+    return out
+
+
+def extra_patterns() -> list[tuple[str, re.Pattern]]:
+    """User patterns from config.redaction.extra_patterns (re-read when config.json changes, at most every 2 s)."""
+    import time
+    now = time.monotonic()
+    if now - _extra_cache["checked"] < 2.0:
+        return _extra_cache["patterns"]
+    _extra_cache["checked"] = now
+    try:
+        from .. import paths
+        p = paths.config_path()
+        key = (str(p), p.stat().st_mtime_ns) if p.exists() else (str(p), 0)
+    except OSError:
+        return _extra_cache["patterns"]
+    if key != _extra_cache["key"]:
+        _extra_cache["key"] = key
+        try:
+            from .. import config
+            _extra_cache["patterns"] = _compile_extra((config.load().get("redaction") or {}).get("extra_patterns"))
+        except Exception:  # noqa: BLE001
+            _extra_cache["patterns"] = []
+    return _extra_cache["patterns"]
+
+
+def reset_cache() -> None:
+    _extra_cache.update({"key": None, "checked": 0.0, "patterns": []})
+
+
 @dataclass
 class Finding:
     kind: str
@@ -66,6 +110,12 @@ def scan(text: str | None) -> list[Finding]:
         val = m.group(2)
         if entropy(val) >= 3.5 and not _PLACEHOLDER.search(val):
             add("high_entropy_secret", m.start(2), m.end(2))
+    for kind, rx in extra_patterns():
+        for m in rx.finditer(text):
+            s, e = m.start(), m.end()
+            if e > s and not any(s < te and e > ts for ts, te in taken):
+                taken.append((s, e))       # user patterns skip the placeholder filter: the user asked for them
+                found.append(Finding(kind, s, e, text[s:s + 4] + "…"))
     return sorted(found, key=lambda f: f.start)
 
 

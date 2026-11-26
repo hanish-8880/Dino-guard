@@ -25,26 +25,87 @@ def home(conn=Depends(get_conn)):
 
 @router.get("/sessions")
 def sessions(harness: str | None = None, project: str | None = None, status: str | None = None,
-             since: str | None = None, limit: int = 100, conn=Depends(get_conn)):
+             since: str | None = None, session: str | None = None, model: str | None = None,
+             environment: str | None = None, event: str | None = None, has_deny: bool = False,
+             min_cost: float | None = None, min_tokens: int | None = None, eval_name: str | None = None,
+             min_score: float | None = None, max_score: float | None = None, limit: int = 100,
+             conn=Depends(get_conn)):
     where, args = [], []
-    if harness:
-        where.append("s.harness=?")
-        args.append(harness)
-    if project:
-        where.append("s.cwd LIKE ?")
-        args.append(f"%{project}%")
-    if status:
-        where.append("s.status=?")
-        args.append(status)
-    if since:
-        where.append("s.last_ts >= ?")
-        args.append(since)
-    sql = ("SELECT s.*, (SELECT COUNT(*) FROM events e WHERE e.session_id=s.id AND e.event='PreToolUse') tools,"
+    for col, val, op in (("s.harness", harness, "="), ("s.cwd", project and f"%{project}%", " LIKE "),
+                         ("s.status", status, "="), ("s.last_ts", since, " >= "), ("s.id", session and f"{session}%",
+                         " LIKE "), ("s.model", model and f"%{model}%", " LIKE "), ("s.environment", environment, "=")):
+        if val:
+            where.append(f"{col}{op}?")
+            args.append(val)
+    if event:
+        where.append("EXISTS (SELECT 1 FROM events e WHERE e.session_id=s.id AND e.event=?)")
+        args.append(event)
+    if has_deny:
+        where.append("EXISTS (SELECT 1 FROM events e WHERE e.session_id=s.id AND e.decision='deny')")
+    if eval_name and (min_score is not None or max_score is not None):
+        where.append("EXISTS (SELECT 1 FROM eval_results r JOIN evals v ON v.id=r.eval_id WHERE r.session_id=s.id "
+                     "AND v.name=? AND r.score >= ? AND r.score <= ?)")
+        args += [eval_name, -1e9 if min_score is None else min_score, 1e9 if max_score is None else max_score]
+    having = []
+    if min_cost is not None:
+        having.append(f"cost >= {float(min_cost)}")
+    if min_tokens is not None:
+        having.append(f"tokens >= {int(min_tokens)}")
+    sql = ("SELECT * FROM (SELECT s.*, (SELECT COUNT(*) FROM events e WHERE e.session_id=s.id AND "
+           "e.event='PreToolUse') tools,"
            " (SELECT COUNT(*) FROM events e WHERE e.session_id=s.id AND e.decision='deny') denies,"
-           " (SELECT COALESCE(SUM(cost_usd),0) FROM model_calls mc WHERE mc.session_id=s.id) cost"
-           " FROM sessions s" + (" WHERE " + " AND ".join(where) if where else "") +
-           " ORDER BY s.last_ts DESC LIMIT ?")
+           " (SELECT COALESCE(SUM(cost_usd),0) FROM model_calls mc WHERE mc.session_id=s.id) cost,"
+           " (SELECT COALESCE(SUM(tokens_in+tokens_out+cache_read+cache_write),0) FROM model_calls mc"
+           " WHERE mc.session_id=s.id) tokens"
+           " FROM sessions s" + (" WHERE " + " AND ".join(where) if where else "") + ")" +
+           (" WHERE " + " AND ".join(having) if having else "") + " ORDER BY last_ts DESC LIMIT ?")
     return rows(conn, sql, (*args, min(limit, 500)))
+
+
+@router.get("/sessions/{sid}/export")
+def export(sid: str, format: str = "json", conn=Depends(get_conn)):
+    from fastapi.responses import PlainTextResponse
+    from ..analytics.export import export_session, to_jsonl
+    try:
+        doc = export_session(conn, sid)
+    except KeyError as e:
+        raise HTTPException(404, str(e)) from e
+    if format == "jsonl":
+        return PlainTextResponse(to_jsonl(doc), media_type="application/x-ndjson", headers={
+            "Content-Disposition": f'attachment; filename="dinoguard-{sid[:12]}.jsonl"'})
+    return doc
+
+
+@router.get("/compare")
+def compare(a: str | None = None, b: str | None = None, by: str | None = None, days: int = 30,
+            conn=Depends(get_conn)):
+    from ..analytics import compare as cmp
+    try:
+        if by:
+            return {"by": by, "groups": cmp.compare_groups(conn, by, days=days)}
+        if not (a and b):
+            raise HTTPException(400, "pass a and b session ids, or by=model|harness|environment|outcome")
+        return cmp.compare_two(conn, a, b)
+    except (KeyError, ValueError) as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@router.get("/errors")
+def errors(days: int = 7, limit: int = 50, conn=Depends(get_conn)):
+    from ..analytics.errors import groups
+    return groups(conn, days=days, limit=min(limit, 200))
+
+
+@router.get("/analytics/tools")
+def analytics_tools(days: int = 7, conn=Depends(get_conn)):
+    from ..analytics.stats import tools
+    return tools(conn, days=days)
+
+
+@router.get("/analytics/policies")
+def analytics_policies(days: int = 7, conn=Depends(get_conn)):
+    from ..analytics.stats import policies
+    return policies(conn, days=days)
 
 
 @router.get("/sessions/{sid}/trace")

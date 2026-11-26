@@ -29,6 +29,7 @@ def build_trace(conn: sqlite3.Connection, session_id: str) -> dict:
             decs.setdefault(d["event_id"], []).append(d)
     calls = rows(conn, "SELECT * FROM model_calls WHERE session_id=? ORDER BY ts", (session_id,))
     approvals = rows(conn, f"SELECT * FROM approvals WHERE event_id IN ({','.join('?' * len(ids))})", ids) if ids else []
+    cps = {c["event_id"]: c for c in rows(conn, "SELECT * FROM checkpoints WHERE session_id=?", (session_id,))}
 
     items, by_id = [], {}
     for e in evs:
@@ -36,7 +37,7 @@ def build_trace(conn: sqlite3.Connection, session_id: str) -> dict:
               "tool_class": e["tool_class"], "input": load_json(e["input_json"], {}), "output": e["output_excerpt"],
               "error": e["error"], "duration_ms": e["duration_ms"], "decision": e["decision"],
               "latency_ms": e["latency_ms"], "agent_id": e["agent_id"], "parent_id": e["parent_id"],
-              "decisions": decs.get(e["id"], []), "children": []}
+              "decisions": decs.get(e["id"], []), "checkpoint": cps.get(e["id"]), "children": []}
         by_id[e["id"]] = it
         if e["parent_id"] and e["parent_id"] in by_id:
             by_id[e["parent_id"]]["children"].append(it)

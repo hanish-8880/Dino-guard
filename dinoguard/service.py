@@ -14,7 +14,7 @@ from .engine import registry as reg_mod
 from .engine.decisions import Decision
 from .engine.events import CanonicalEvent
 from .engine.runner import Evaluation, evaluate
-from .store import db, queries, writer
+from .store import db, drift, queries, writer
 from .tokens import transcript
 
 
@@ -74,8 +74,13 @@ class Service:
         ev = evaluate(event, reg, cfg, history=history, tokens=tokens, reviewer=self.reviewer(cfg),
                       approver=self.approver(cfg))
         latency = (time.perf_counter() - t0) * 1000
+        if event.event == "PreToolUse" and ev.decision.kind != "deny":
+            from .undo import maybe_checkpoint
+            with self._lock:
+                maybe_checkpoint(self.conn, event, ev.decision, cfg)
         with self._lock:
-            writer.record(self.conn, ev, tokens, latency)
+            writer.record(self.conn, ev, tokens, latency, cfg)
+            drift.observe(self.conn, event)
         if event.event == "SessionEnd":
             self._on_session_end(event.session_id)
         return ev

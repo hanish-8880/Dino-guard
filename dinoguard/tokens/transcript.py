@@ -34,6 +34,10 @@ def parse_usage_line(line: str) -> dict | None:
 
 def ingest(conn: sqlite3.Connection, session_id: str, path: str | None) -> int:
     """Read new bytes since the stored offset; insert one model_calls row per assistant message id."""
+    try:
+        prices.ensure_repriced(conn)       # costs follow the current price table
+    except (OSError, sqlite3.Error):
+        pass
     if not path or not os.path.isfile(path):
         return 0
     row = conn.execute("SELECT path, offset FROM transcript_offsets WHERE session_id=?", (session_id,)).fetchone()
@@ -81,6 +85,8 @@ def stats(conn: sqlite3.Connection, session_id: str, now: str | None = None) -> 
         st.model = last["model"]
         st.context_tokens = last["context_tokens"] or 0
         st.context_window = int(prices.for_model(last["model"]).get("context_window", 200000))
+        if st.context_tokens > st.context_window:     # the table is out of date: the real window is bigger
+            st.context_window = 1_000_000 if st.context_tokens <= 1_000_000 else st.context_tokens
         ref = parse_iso(now) if now else parse_iso(last["ts"])
         since = (ref - timedelta(seconds=60)).strftime("%Y-%m-%dT%H:%M:%S")
         burn = conn.execute("SELECT COALESCE(SUM(tokens_in + tokens_out + cache_write),0) b FROM model_calls "

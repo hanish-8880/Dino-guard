@@ -28,11 +28,11 @@ function ask(payload) {
 }
 export const DinoGuard = async ({ directory }) => ({
   "tool.execute.before": async (input, output) => {
-    const d = ask({ event: "tool.execute.before", tool: input.tool, args: output.args, sessionID: input.sessionID, cwd: directory });
+    const d = ask({ event: "tool.execute.before", tool: input.tool, args: output.args, sessionID: input.sessionID, callID: input.callID, cwd: directory });
     if (d.decision === "deny") throw new Error(d.reason || "Blocked by DinoGuard");
   },
   "tool.execute.after": async (input, output) => {
-    ask({ event: "tool.execute.after", tool: input.tool, args: input.args, output: String(output?.output ?? ""), sessionID: input.sessionID, cwd: directory });
+    ask({ event: "tool.execute.after", tool: input.tool, args: input.args, output: String(output?.output ?? ""), sessionID: input.sessionID, callID: input.callID, cwd: directory });
   },
 });
 """
@@ -40,6 +40,7 @@ export const DinoGuard = async ({ directory }) => ({
 
 class OpenCodeAdapter(Adapter):
     name = "opencode"
+    VERIFIED_VERSION = "v1.19.6 plugin API (source read 2026-11-26)"
     blocking_events = frozenset({"PreToolUse"})
 
     def to_canonical(self, raw: dict) -> CanonicalEvent:
@@ -52,7 +53,7 @@ class OpenCodeAdapter(Adapter):
         out, n = response_text(raw.get("output"))
         return CanonicalEvent(event=ev, harness="opencode", session={"id": raw.get("sessionID") or "unknown",
                                                                       "cwd": raw.get("cwd")},
-                              tool=tool, prompt=raw.get("prompt"), output=out or None, output_chars=n,
+                              tool=tool, prompt=raw.get("prompt"), output=out or None, output_chars=n, tool_use_id=raw.get("callID"),
                               extra={"native_event": native}, raw=raw)
 
     def to_native(self, event, decision) -> NativeResponse:

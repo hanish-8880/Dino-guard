@@ -31,6 +31,9 @@ def _home(env: str, default: str) -> Path:
 
 
 def target(harness: str, scope: str, cwd: str) -> Path:
+    from . import more_install
+    if harness in more_install.MORE:
+        return more_install.target(harness, scope, cwd)
     root = Path(cwd)
     if harness == "cursor":
         return (root / ".cursor" / "hooks.json") if scope != "user" else _home("DG_CURSOR_HOME", ".cursor") / "hooks.json"
@@ -119,7 +122,16 @@ def _strip_cursor_flat(settings: dict) -> dict:
 
 
 def install_other(harness: str, scope: str = "user", cwd: str | None = None) -> dict:
+    from . import more_install
     cwd = cwd or os.getcwd()
+    if harness == "hermes":
+        from .hermes import SNIPPET
+        return {"settings": "(manual: Hermes profile config.yaml)", "command": hook_command("hermes"),
+                "note": "Hermes config.yaml is yours, so DinoGuard doesn't rewrite it. Add this:\n"
+                        + SNIPPET.replace("{cmd}", hook_command("hermes").replace('"', '\\"'))}
+    more = harness in more_install.MORE
+    if more:
+        more_install.pre_check(harness, scope, cwd)
     t = target(harness, scope, cwd)
     original = t.read_bytes() if t.exists() else None
     if original is not None:
@@ -128,10 +140,14 @@ def install_other(harness: str, scope: str = "user", cwd: str | None = None) -> 
         tmp = json.loads(original.decode() or "{}")
         original_clean = json.dumps(_strip_cursor_flat(tmp)).encode()
         out = render(harness, original_clean)
+    elif more:
+        out = more_install.render(harness, original, scope)
     else:
         out = render(harness, original)
     t.parent.mkdir(parents=True, exist_ok=True)
     t.write_bytes(out)
+    if more:
+        more_install.after_install(harness, t)
     st = _load_state()
     prev = st.get(str(t))
     orig_b64 = prev["original"] if prev and prev.get("written_sha") == (_sha(original) if original else None) \
@@ -141,14 +157,29 @@ def install_other(harness: str, scope: str = "user", cwd: str | None = None) -> 
     _save_state(st)
     note = ""
     if harness == "codex":
-        note = "Enable hooks in ~/.codex/config.toml: [features] hooks = true"
+        note = ("Open Codex and trust the new hooks once with /hooks (Codex won't run unreviewed hooks; editing them "
+                "resets the trust). Hooks are on by default unless [features] hooks = false.")
     if harness == "gemini":
         note = "Gemini CLI may be replaced by Antigravity CLI for some tiers; check your CLI supports hooks."
+    if more:
+        note = more_install.note(harness, t)
     return {"settings": str(t), "command": hook_command(harness), "note": note}
 
 
 def uninstall_other(harness: str, scope: str = "user", cwd: str | None = None) -> dict:
+    from . import more_install
+    if harness == "hermes":
+        return {"settings": "(manual)", "action": "remove the dinoguard-hook entries from your Hermes config.yaml"}
     t = target(harness, scope, cwd or os.getcwd())
+    if harness in more_install.MORE:
+        res = _uninstall_file(harness, scope, t)
+        more_install.after_uninstall(harness, t)
+        return res
+    return _uninstall_file(harness, scope, t)
+
+
+def _uninstall_file(harness: str, scope: str, t: Path) -> dict:
+    from . import more_install
     st = _load_state()
     entry = st.pop(str(t), None)
     _save_state(st)
@@ -161,10 +192,13 @@ def uninstall_other(harness: str, scope: str = "user", cwd: str | None = None) -
             return {"settings": str(t), "action": "removed file created by install"}
         t.write_bytes(base64.b64decode(entry["original"]))
         return {"settings": str(t), "action": "restored original byte-for-byte"}
-    if harness in ("opencode", "copilot"):
+    if harness in ("opencode", "copilot") + more_install.FILE_ONLY:
         t.unlink()
         return {"settings": str(t), "action": "removed DinoGuard file"}
-    data = json.loads(cur.decode() or "{}")
-    data = _strip_cursor_flat(data) if harness == "cursor" else _strip(data)
+    data = json.loads(cur.decode("utf-8-sig") or "{}")
+    if harness in more_install.MORE:
+        data = more_install.strip(data, harness, scope)
+    else:
+        data = _strip_cursor_flat(data) if harness == "cursor" else _strip(data)
     t.write_bytes((json.dumps(data, indent=2) + "\n").encode())
     return {"settings": str(t), "action": "file changed since install; removed only DinoGuard hooks"}

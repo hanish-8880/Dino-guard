@@ -71,4 +71,6 @@ def test_reviewable_builtins_have_reviewers(builtins):
 def test_default_enabled_set(builtins):
     enabled = {p.name for p in builtins.policies if p.default_enabled}
     assert {"guard-self-protect", "secret-in-output", "secret-before-write", "no-env-read", "no-sudo", "no-rm-rf",
-            "no-curl-pipe-shell", "no-push-main", "no-force-push", "warn-destructive-sql", "loop-detected"} == enabled
+            "no-curl-pipe-shell", "no-push-main", "no-force-push", "warn-destructive-sql", "loop-detected",
+            # token tips are instruct-only, so they are on by default; token-budget (can deny) stays off
+            "token-repeat-read", "token-big-output", "token-context-high", "token-model-fit"} == enabled

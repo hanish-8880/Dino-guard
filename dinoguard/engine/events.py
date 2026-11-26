@@ -16,6 +16,9 @@ EVENT_GROUPS: dict[str, list[str]] = {
     "context": ["PreCompact", "PostCompact", "InstructionsLoaded"],
     "environment": ["ConfigChange", "CwdChanged", "FileChanged", "WorktreeCreate", "WorktreeRemove"],
     "interaction": ["Notification", "Elicitation", "ElicitationResult"],
+    # SDK lifecycle (CLAUDE.md §17.9): sent by custom agents through the tracer; all observe-only
+    "sdk": ["ModelRequest", "ModelResponse", "HookStart", "HookEnd", "HumanWait", "HumanInput", "Interruption",
+            "AgentError", "AgentPause", "AgentResume"],
 }
 EVENTS: list[str] = [e for group in EVENT_GROUPS.values() for e in group]
 

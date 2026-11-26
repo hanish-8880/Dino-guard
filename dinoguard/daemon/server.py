@@ -141,7 +141,8 @@ class Daemon:
 
 def tick(service) -> None:
     """Background work: alert checks and scheduled audits. Never raises."""
-    for mod, fn in (("..alerts.engine", "check_due"), ("..audit.schedule", "run_due")):
+    for mod, fn in (("..alerts.engine", "check_due"), ("..audit.schedule", "run_due"),
+                    ("..store.retention", "run_due")):
         try:
             import importlib
             m = importlib.import_module(mod, __package__)

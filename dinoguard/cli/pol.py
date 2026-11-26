@@ -73,6 +73,9 @@ def cmd_policies(args) -> int:
         console.print("[red]policy name required[/]")
         return 2
     p = reg.get(t)
+    if p is None and ":" in t:          # pack:policy -> the registered pack/policy name
+        p = reg.get(t.replace(":", "/", 1))
+        t = p.name if p else t
     if p is None:
         console.print(f"[red]unknown policy {t!r}[/]")
         return 2

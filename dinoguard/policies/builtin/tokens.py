@@ -6,7 +6,8 @@ from ...engine.registry import builtin_policy
 from ...util import path_key
 from ._common import file_path
 
-_TIP = dict(category="tokens", default_enabled=False)
+# Tips never block, so they are on by default (they drive the runner's orange "sprint" state).
+_TIP = dict(category="tokens", default_enabled=True)
 
 
 @builtin_policy("token-repeat-read", events=["PreToolUse"], params={"times": 3}, **_TIP,
@@ -65,7 +66,8 @@ def token_model_fit(ctx):
 
 
 @builtin_policy("token-budget", params={"budget_usd": None, "warn_pct": 0.8},
-                events=["PreToolUse", "UserPromptSubmit"], **_TIP,
+                events=["PreToolUse", "UserPromptSubmit"], category="tokens",
+                default_enabled=False,      # can deny, and needs a budget set first
                 description="Instruct at 80% of the session budget; deny at 100% until the user raises it.")
 def token_budget(ctx):
     budget = ctx.params.get("budget_usd")

@@ -1,4 +1,5 @@
-"""`dinoguard mcp`: minimal MCP server over stdio (JSON-RPC 2.0, newline-delimited), read-only tools."""
+"""`dinoguard mcp`: MCP server over stdio or local HTTP (JSON-RPC 2.0). Read tools answer directly; write tools
+need a human yes first (see mcp_write). Only the tool name and success are logged for each call."""
 from __future__ import annotations
 
 import json
@@ -19,12 +20,37 @@ TOOLS = [
      "inputSchema": {"type": "object", "properties": {}}},
     {"name": "explain_decision", "description": "Why DinoGuard allowed/instructed/denied one event.",
      "inputSchema": {"type": "object", "properties": {"event_id": {"type": "string"}}, "required": ["event_id"]}},
+    {"name": "ask", "description": "Ask a plain-words question about agent activity, e.g. 'why does my agent keep "
+                                   "failing?' (read-only; cites session ids).",
+     "inputSchema": {"type": "object", "properties": {"question": {"type": "string"}}, "required": ["question"]}},
 ]
+
+
+def all_tools() -> list[dict]:
+    from .mcp_write import WRITE_TOOLS
+    return TOOLS + WRITE_TOOLS
+
+
+def log_call(conn, tool: str, ok: bool, transport: str) -> None:
+    """Only the tool name and success are kept (never arguments or results)."""
+    from ..util import new_id, now_iso
+    try:
+        conn.execute("INSERT INTO mcp_calls(id, ts, tool, ok, transport) VALUES (?,?,?,?,?)",
+                     (new_id("mcp"), now_iso(), str(tool)[:80], 1 if ok else 0, transport))
+        conn.commit()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def call_tool(conn, name: str, args: dict):
     from ..store.db import rows
     from ..store.queries import safe_select
+    from .mcp_write import NAMES, call_write
+    if name in NAMES:
+        return call_write(conn, name, args)
+    if name == "ask":
+        from .nl2sql import ask
+        return ask(conn, str(args.get("question") or ""))
     if name == "list_sessions":
         return rows(conn, "SELECT id, harness, cwd, first_prompt, status, last_ts, cost_usd FROM sessions "
                           "ORDER BY last_ts DESC LIMIT ?", (min(int(args.get("limit", 20)), 200),))
@@ -51,7 +77,7 @@ def call_tool(conn, name: str, args: dict):
     raise KeyError(f"unknown tool {name}")
 
 
-def handle(conn, msg: dict) -> dict | None:
+def handle(conn, msg: dict, transport: str = "stdio") -> dict | None:
     mid, method = msg.get("id"), msg.get("method")
     if mid is None:
         return None   # notification
@@ -62,7 +88,7 @@ def handle(conn, msg: dict) -> dict | None:
         elif method == "ping":
             result = {}
         elif method == "tools/list":
-            result = {"tools": TOOLS}
+            result = {"tools": all_tools()}
         elif method == "tools/call":
             p = msg.get("params") or {}
             try:
@@ -70,6 +96,7 @@ def handle(conn, msg: dict) -> dict | None:
                 result = {"content": [{"type": "text", "text": json.dumps(data, default=str)}], "isError": False}
             except Exception as e:  # noqa: BLE001
                 result = {"content": [{"type": "text", "text": f"{type(e).__name__}: {e}"}], "isError": True}
+            log_call(conn, p.get("name"), not result["isError"], transport)
         else:
             return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32601, "message": f"method not found: {method}"}}
     except Exception as e:  # noqa: BLE001

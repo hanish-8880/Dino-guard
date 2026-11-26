@@ -78,7 +78,7 @@ Key ideas (keep these exactly):
 1. **Hook → Adapter → Canonical event → Policy engine → Decision → Adapter → Native response.**
 2. **Adapters normalise** harness-specific event names, tool names and tool-input fields into one canonical shape *before* any policy runs. Policies never see harness-specific formats.
 3. **Daemon (`dinoguardd`)** is the single evaluator once configured. The hook process is a thin client that talks to it over a unix socket (`~/.dinoguard/dinoguardd.sock`).
-4. **Fail-closed:** if the daemon is configured but unreachable, times out, or its protocol version ≠ client version → **deny**, with a reason telling the operator to run `dinoguard doctor`. No silent fallback to a second evaluator. (Before a daemon is configured, the hook evaluates in-process.)
+4. **Fail-closed:** if the daemon is configured but unreachable, times out, or its protocol version ≠ client version → **deny**, with a reason telling the operator to run `dinoguard doctor`. No silent fallback to a second evaluator. (Before a daemon is configured, the hook evaluates in-process.) One exception to "deny at once": if the daemon is simply **not running** (connection refused, e.g. after a reboot), the hook starts it once and retries; if that fails it denies. It never restarts a daemon stopped with `dinoguard daemon stop`, and `daemon.autostart=false` turns this off.
 5. **Capture vs enforcement:** some events can block (pre-tool, prompt submit, permission request, stop), others are observe-only (post-tool, session lifecycle). Blocking after a tool ran **cannot undo side effects** — document this in the UI.
 
 ---
@@ -125,6 +125,10 @@ dinoguard/
     dashboard/                   # FastAPI app + static HTML/JS
     assistant/                   # "ask your data" chat + MCP server
     otel/                        # OpenTelemetry ingest (optional)
+    analytics/                   # error groups, tool/policy stats, compare, export (§17.2-3)
+    tracer.py frameworks.py      # SDK lifecycle tracer + LangChain/LlamaIndex/CrewAI/Pydantic AI/Deep Agents helpers
+    undo.py                      # git checkpoint before risky actions (§17.12)
+  sdk/ts/                        # dependency-free JS/TS client for POST /api/v1/events
   tests/
   docs/
 ```
@@ -267,12 +271,16 @@ If an **enforced** pack fails to load, or loads fewer policies than its manifest
 **Workflow gates (Stop / SubagentStop)** — block the agent from ending its turn until:
 - `stop-require-commit`, `stop-require-push`, `stop-require-pr`, `stop-require-no-conflicts`, `stop-require-green-ci`, `stop-require-tests-pass`. All off by default.
 
-**Token coaching (our extras, instruct only, never block)**
-- `token-repeat-read`: same file read ≥3 times this session → tip.
-- `token-big-output`: tool output > 20k tokens → tip "search/grep instead".
-- `token-context-high`: context ≥80% of window → tip "/compact".
-- `token-model-fit`: tiny edits on the largest model for many turns → tip "use a smaller model".
+**Token coaching (our extras, instruct only, never block)** — the four tips are D (they never block, and they drive
+the runner's orange sprint state); `token-budget` stays off until a budget is set.
+- `token-repeat-read` D: same file read ≥3 times this session → tip.
+- `token-big-output` D: tool output > 20k tokens → tip "search/grep instead".
+- `token-context-high` D: context ≥80% of window → tip "/compact".
+- `token-model-fit` D: tiny edits on the largest model for many turns → tip "use a smaller model".
 - `token-budget` (configurable): session cost > budget → instruct at 80%, deny at 100% until user approves.
+- Prices live in `tokens/prices.yaml` (current Claude list prices + context windows; user copy wins). An untouched
+  older default copy is upgraded automatically; stored costs are recalculated when the table changes. If observed
+  context exceeds the table's window, the window is treated as 1M (never show >100%).
 
 **Human approval (our extra)**
 - `phone-approval`: for configured patterns (default: push to main, prod DB, `terraform apply`) → hold and send WhatsApp/Telegram "Approve? YES/NO". Wait up to `timeout_s` (default 120). YES → allow, NO/timeout → deny.
@@ -357,6 +365,46 @@ Bottom line: `tokens 42k/200k ▕████░░░░▏ burn: low · $0.31 
 Also `--web` flag: same animation on a `<canvas>` at `localhost:8030/runner`.
 Must render at ≥20 fps with <3% CPU. Reconnects if the stream file rotates.
 
+**Dino sprite** (shared by terminal runner, web runner and notch): 22×13 body + 2 leg rows, `X` = dot; walking
+alternates legs A / B; deny/shield close the eye to blink.
+
+```
+..............XXXXXX..      LEGS A:                  LEGS B:
+.............XXXXXXXX.      ....XX.......XX.......   ......XX...XX.........
+.............XX.XXXXXX      ....XXX......XXX......   ......XXX..XXX........
+.............XXXXXXXXX
+.............XXXXXXXXX
+.......X.X.X.XXXXX....
+......XXXXXXXXXXXXXX..
+X....XXXXXXXXXXXXX....
+XX..XXXXXXXXXXXXXX.XX.
+.XXXXXXXXXXXXXXXXX....
+..XXXXXXXXXXXXXXX.....
+....XXXXXXXXXXXX......
+.....XXXX..XXXX.......
+```
+
+**Floating notch** — `dinoguard notch`: a small always-on-top pill that sits beside your apps, not inside a
+terminal. Built with `tkinter` (standard library, no new deps).
+- Look: `#1F1F1E` background, square top corners, bottom corners radius 20 px; collapsed 230×46, expanded
+  330×104, 0.35 s ease-in-out between them. Each `X` is drawn as a round dot.
+- Colours: walk `#97C459`, sprint `#EF9F27`, deny / shield = grey blinking dino behind a dotted wall
+  (`#E24B4A` deny, `#7F77DD` shield), approval `#85B7EB` with a blinking "?".
+- No title bar, no taskbar icon, see-through outside the shape. Default spot is bottom-left, just above the taskbar
+  (uses the screen work area, so it never covers the taskbar).
+- Drag it anywhere; the position is saved in `~/.dinoguard/notch.json` and reused next time.
+- Right-click menu: Corner (bottom-left / bottom-right / top-center), Open dashboard, Hide for 10 min, Quit.
+  Double-click opens the dashboard; a single click re-shows the last reason.
+- Inside: the same dotted dino drawn as real dots on a Canvas, a thin token fuel bar, and a one-line status
+  (`allow · Bash npm test`). Same `stream.jsonl`, same states and colours as the terminal runner.
+- Collapsed by default. On a deny, tip, instruct or approval request it expands for 4 s to show the reason,
+  then shrinks back.
+- ~20 fps, under 2% CPU. Only one notch runs at a time. `dinoguard notch` starts it in the background;
+  `--foreground` runs it in the current process.
+- `dinoguard notch --autostart` adds a shortcut to the Windows Startup folder (macOS LaunchAgent / Linux
+  autostart entry) so it opens on login; `--no-autostart` removes it. `--corner X` sets the default corner.
+- `dinoguard runner` (terminal) keeps working as before.
+
 ---
 
 ## 11. CLI (all subcommands)
@@ -367,6 +415,7 @@ dinoguard uninstall
 dinoguard doctor            # daemon health, version skew, hook wiring, pack integrity
 dinoguard status
 dinoguard runner [--web]
+dinoguard notch [--autostart|--no-autostart] [--corner bottom-left|bottom-right|top-center] [--foreground]
 dinoguard dashboard          # opens localhost:8030
 dinoguard policies [list|enable|disable|observe|enforce|show <name>]
 dinoguard policies add <owner>/<repo>[@tag] [--policy x] [--category y] [--all]
@@ -386,6 +435,14 @@ dinoguard reviewer [setup|status|test]
 dinoguard ask "which sessions burned the most tokens this week?"
 dinoguard pause [--minutes N]     # session pause (pack-unavailable deny doesn't fire)
 dinoguard publish                 # build a pack from local policies
+dinoguard prune [--days N] [--dry-run]                    # §17.1
+dinoguard export <session> [--format json|jsonl]          # §17.2
+dinoguard compare <a> <b> | --by model|harness|environment|outcome
+dinoguard errors [--days N]                               # §17.3
+dinoguard audit suggest <finding-id> [--install] | audit --history | audit --goal/--project/--session/--env/--context
+dinoguard eval new <name> --from "plain words" | eval rollback <name> | eval results <name> --by harness
+dinoguard mcp [--http --port 8031]                        # §17.11
+dinoguard undo [<event-id>]                               # §17.12
 ```
 
 Env: `DG_NO_FIRST_RUN=1` skips the first-run wizard. `dinoguard install` must work non-interactively in CI.
@@ -480,6 +537,15 @@ Shortcut: `Ctrl+J` opens the assistant dock on any page.
 **Phase 11 — Showcase polish**
 - One-command install (`pipx install dinoguard && dinoguard install`), first-run wizard, `demo/` script that runs a scripted risky session to show every runner state in 60 s, README with GIF.
 
+**Phase 12 — Inventory gaps, local core** (added 2026-11-26, see §17)
+- Done when: every item in §17.1–§17.8 has tests, `pytest -q` is green, and PROGRESS.md lists each item.
+
+**Phase 13 — SDK lifecycle, more harnesses, MCP writes** (see §17.9–§17.12)
+- Each new harness adapter starts only after its current hook docs are read and written to `docs/adapters/<h>.md`.
+  No hook mechanism → stub + capability table saying so.
+- Done when: tracer, HTTP ingest, TS client, framework helpers, the 7 adapters + installers, MCP write tools with
+  approval, MCP over HTTP, plain-words audit answers and the undo hint all have tests, and `pytest -q` is green.
+
 ---
 
 ## 15. Tests that must always pass
@@ -529,4 +595,143 @@ Shortcut: `Ctrl+J` opens the assistant dock on any page.
 | ★ | **Secret blocking before write** | 2 |
 | ★ | **Loop hard-stop after N repeats** | 4 |
 
-Out of scope for the showcase: multi-user orgs, RBAC, SSO/SAML, hosted cloud, SOC 2.    
+Out of scope for the showcase: multi-user orgs, RBAC, SSO/SAML, hosted cloud, SOC 2.
+
+---
+
+## 17. Inventory additions (2026-11-26)
+
+Added after a full feature inventory of the reference product. Items already built are not repeated here; this is
+only what was missing. Same rules as everything else: our own code, our own names.
+
+### 17.1 Data safety (beats "traces hold code and credentials")
+- **Retention:** `config.retention_days` (default 90; `0` = keep forever). `dinoguard prune [--days N] [--dry-run]`
+  deletes old events, decisions, model calls, ended sessions and trims `stream.jsonl`. The daemon prunes once a day.
+- **Configurable redaction:** extra regex patterns in `config.redaction.extra_patterns` (`[{name, pattern}]`),
+  applied with the built-in secret scanner everywhere it runs. `config.redaction.store_outputs=false` stores no
+  tool output excerpts at all.
+- **No run cap.** Local DinoGuard never limits runs, evals or audits. Say so in the README.
+
+### 17.2 Trace and sessions
+- **Environment label:** `DG_ENV` (or `config.environment`, default `local`) is stored on each session.
+- **Filters** on `/api/sessions` and the Sessions page: harness, project, status, since, session id, model,
+  environment, event type, has-deny, min cost, min tokens, eval min/max score.
+- **Export:** `dinoguard export <session> [--format json|jsonl] [--out FILE]` and
+  `GET /api/sessions/{id}/export`. Export is the already-redacted store data, never raw native payloads.
+- **Compare:** `dinoguard compare <a> <b>` and `/api/compare?a=&b=` — side by side: duration, tools used, denies,
+  instructs, errors, cost, tokens, eval scores. `dinoguard compare --by model|harness|environment|outcome
+  [--days N]` groups sessions and compares the same metrics ("did switching model help?", "clean vs failed runs").
+
+### 17.3 Analytics
+- **Error grouping:** each tool error gets a fingerprint (lower-case; numbers, hex, paths and quoted strings
+  replaced by placeholders; first 160 chars). `GET /api/errors` and `dinoguard errors [--days N]` show groups with
+  count, tools, sessions, first/last seen and one example.
+- **Tool analytics** (`/api/analytics/tools`): calls, error rate, p50/p95 duration per tool.
+- **Policy analytics** (`/api/analytics/policies`): allow / instruct / deny / would-deny counts per policy.
+- The Metrics page shows all three.
+
+### 17.4 Audit v2
+- **Audit setup:** `dinoguard audit --goal "..." [--project P] [--session ID ...] [--env E] [--context FILE]
+  [--days N]`. Goal, selection and reference context are stored in `audits.scope_json` and shown with findings.
+- **Agent contract:** `.dinoguard/contract.yaml` (project) or the same file in the user's DinoGuard home:
+  ```yaml
+  should: ["run the tests before finishing"]
+  should_not:
+    - text: "touch the payments folder"
+      paths: ["payments/"]          # any of: paths, commands (regex), tools
+    - text: "deploy anything"
+      commands: ["\\b(kubectl|terraform)\\s+apply\\b"]
+  ```
+  `should_not` rules are checked deterministically during the audit, and live by the observe-only policy
+  `contract-should-not` (off by default). Violations are findings with failure mode `contract violation: <text>`.
+  `should` items are listed as "needs human review".
+- **History and coverage:** table `audit_runs(id, audit_id, started_at, finished_at, sessions, tool_calls,
+  findings, coverage_json)`. Coverage = sessions scanned / sessions known to the store, per project.
+  `dinoguard audit --history`.
+- **Evidence lines:** every evidence item carries the transcript file and line number (`path:line`).
+- **Recurrence check:** each finding has a `fingerprint` (the policy name). When an insight is resolved and a later
+  audit finds the same fingerprint at a time after the resolve, the insight is reopened (`open`, `recurred`
+  comment) and an alert goes to the severity route (§17.8).
+- **One-click suggested policy:** `dinoguard audit suggest <finding-id> [--install]` drafts a policy from the
+  finding (template path when no LLM) and, with `--install`, deploys it in **observe** mode.
+
+### 17.5 Evaluations v2
+- **Plain-words drafting:** `dinoguard eval new <name> --from "session should cost under $1"` → LLM drafts the code
+  expression; without an LLM a template matcher handles cost / duration / tool-count / error-count / deny-count
+  phrases. The draft must still be tested before deploy.
+- **Rollback:** `dinoguard eval rollback <name>` → redeploy the previous version.
+- **Compare:** `dinoguard eval results <name> --by harness|environment|model` → average score + pass rate per group.
+
+### 17.6 Packs v2
+- Sources: `owner/repo`, `owner/repo@tag`, `github:owner/repo@tag`, a release URL
+  (`https://github.com/o/r/releases/tag/<tag>`), or a local folder.
+- `--only` is an alias for `--policy`. `pack:policy` selects a policy when two packs share a name.
+- `DG_NO_DOWNLOAD=1` → never touch the network (local folders only, clear error otherwise).
+  `DG_PACK_BASE_URL` → download from a mirror instead of `https://github.com`.
+
+### 17.7 Hook drift (beats "hook systems change between versions")
+- Adapters record native event names and tool names they don't recognise into table
+  `hook_drift(harness, harness_version, kind, value, first_seen, last_seen, count)`.
+- Each adapter exposes `VERIFIED_VERSION` (matching its `docs/adapters/<h>.md`).
+- `dinoguard doctor` warns on unknown events/tools seen in the last 7 days. Unknown events are still recorded
+  (observe), never silently dropped.
+- `dinoguard status` prints the capability table (blocks / observe-only) for each installed harness.
+
+### 17.8 Alert routing
+- `config.alerts.routes`: `{"critical": ["whatsapp"], "warning": ["slack"]}`. An alert with no channels of its own
+  uses the route for its severity. Recurrence alerts use the same routes.
+
+### 17.9 SDK lifecycle events (Phase 13)
+- Python SDK tracer: `with dinoguard.trace_session(agent_id=..., environment=...) as t:` with `t.model_request /
+  model_response / tool_call / tool_result / hook_start / hook_end / human_wait / human_input / interruption /
+  error / pause / resume`. Tool calls still go through `check()` and can be denied.
+- New observe-only canonical events for SDK use: `ModelRequest`, `ModelResponse`, `HumanWait`, `HumanInput`,
+  `Interruption`, `AgentError`, `AgentPause`, `AgentResume`.
+- `POST /api/v1/events` (token-protected) so agents in any language can send canonical events; FastAPI's
+  `/openapi.json` is the documented HTTP API. A tiny TypeScript client lives in `sdk/ts/` (no build step).
+- Framework helpers: LangChain, LlamaIndex, Pydantic AI, CrewAI (callback wrappers over the tracer).
+
+### 17.10 More harnesses (Phase 13, verify docs first)
+- Pi, Factory Droid, Devin CLI, Antigravity CLI, Hermes, OpenClaw, Deep Agents. Each gets a
+  `docs/adapters/<h>.md` capability table (pre-tool block? turn-end gate? observe-only?).
+- How each one plugs in (verified 2026-11-26):
+  - stdin-JSON command hooks: Devin, Droid, Deep Agents Code (all Claude-shaped), Antigravity (camelCase, event
+    passed as an argument), Hermes (own shape; installed as a printed `config.yaml` snippet, never rewritten).
+  - In-process plugins: Pi and OpenClaw get a generated JS shim that calls `dinoguard-hook <harness>` and fails
+    closed; the Deep Agents SDK gets `frameworks.deepagents_middleware`.
+  - Devin reads Claude Code's hook files: the hook recognises Devin (and Droid) from the env vars they set, and
+    the Devin installer refuses to double-register.
+  - Known limits, stated in the docs: Deep Agents Code fails open on hook errors; Hermes needs `fail_closed: true`.
+  - Re-verified the same day: Codex (Claude-shaped, string `command`, must be trusted via `/hooks`, fails open on
+    crashes → we always answer explicitly), OpenCode v1.19.6 (throw blocks), and Goose, which now has real hooks
+    (Open Plugins layout, `{"decision":"block"}`, `on_failure: block`) and is no longer a stub.
+
+### 17.11 MCP v2 (Phase 13)
+- Write tools (`ack_insight`, `resolve_insight`, `set_policy_mode`, `run_audit`); each needs a human yes via the
+  approvals flow (or dashboard) before it applies. Only tool name and success are logged for MCP calls.
+- `dinoguard mcp --http [--port 8031]` (localhost only, token) in addition to stdio.
+- The assistant answers plain-words audit questions ("why does my agent keep failing?") from the latest findings
+  and error groups, citing session ids.
+
+### 17.12 Undo hint (Phase 13, beats "a block after a tool runs cannot undo it")
+- Before an allowed destructive-shaped command or a large overwrite in a git repo, record `git stash create`
+  (does not touch the working tree) as a checkpoint ref on the event. `dinoguard undo <event-id>` prints the
+  checkpoint and the exact `git` command to restore it; it never restores on its own.
+
+### 17.13 Checklist additions
+| # | Feature | Phase |
+|---|---|---|
+| 26 | Retention + prune, configurable redaction, no-output mode | 12 |
+| 27 | Environment labels, rich session filters, trace export, session compare | 12 |
+| 28 | Error grouping, tool + policy analytics | 12 |
+| 29 | Audit goal/selection/context, agent contract, history + coverage, evidence lines | 12 |
+| 30 | Recurrence check → reopen insight + alert | 12 |
+| 31 | Finding → suggested policy installed in observe | 12 |
+| 32 | Eval drafting from plain words, eval rollback, compare by group | 12 |
+| 33 | Pack source forms, `--only`, `pack:policy`, offline + mirror env vars | 12 |
+| 34 | Hook drift detection + verified versions + capability table in status | 12 |
+| 35 | Alert severity routing | 12 |
+| 36 | SDK lifecycle tracer, HTTP event ingest, TS client, framework helpers | 13 |
+| 37 | Pi / Droid / Devin / Antigravity / Hermes / OpenClaw / Deep Agents adapters | 13 |
+| 38 | MCP write tools with approval, MCP over HTTP, plain-words audits | 13 |
+| 39 | Undo hint via git checkpoint | 13 |    

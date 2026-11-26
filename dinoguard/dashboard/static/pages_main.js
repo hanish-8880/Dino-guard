@@ -22,7 +22,14 @@ DG.pages.sessions = async (v) => {
   v.innerHTML = `<h1>Sessions</h1><form class="filters" id="f">
     <select name="harness"><option value="">any harness</option><option>claude</option><option>cursor</option><option>codex</option><option>sdk</option><option>otel</option></select>
     <input name="project" placeholder="project path contains"><select name="status"><option value="">any status</option><option>active</option><option>ended</option></select>
-    <input name="since" type="date"><button>Filter</button></form><div id="list"></div>`;
+    <input name="since" type="date"><input name="session" placeholder="session id" size="10"><input name="model" placeholder="model" size="10">
+    <input name="environment" placeholder="environment" size="10"><select name="event"><option value="">any event</option><option>PreToolUse</option><option>PostToolUseFailure</option><option>Stop</option><option>SubagentStart</option><option>PreCompact</option></select>
+    <input name="min_cost" type="number" step="0.01" placeholder="min $" style="width:6em"><input name="min_tokens" type="number" placeholder="min tokens" style="width:8em">
+    <label class="small"><input name="has_deny" type="checkbox" value="true"> has deny</label><button>Filter</button></form>
+    <form class="filters" id="cmp"><input name="a" placeholder="session A" size="12"><input name="b" placeholder="session B" size="12"><button>Compare</button>
+    <a href="#/compare" class="small">compare groups (model, harness, environment, outcome)</a></form><div id="list"></div>`;
+  v.querySelector("#cmp").addEventListener("submit", e => { e.preventDefault(); const c = new FormData(e.target);
+    location.hash = "#/compare/" + encodeURIComponent(c.get("a")) + "/" + encodeURIComponent(c.get("b")); });
   const f = v.querySelector("#f");
   for (const [k, val] of p) if (f.elements[k]) f.elements[k].value = val;
   async function load() {
@@ -53,6 +60,7 @@ function traceItem(it, child) {
     ${it.agent_id ? `<span class="badge">sub-agent ${esc(it.agent_id.slice(0, 8))}</span>` : ""}
     <div class="mono small">${esc(summarize(it.input)).slice(0, 300)}</div>
     ${it.error ? `<div class="small" style="color:var(--critical)">error: ${esc(it.error)}</div>` : ""}
+    ${it.checkpoint ? `<div class="muted small">git checkpoint before this (${esc(it.checkpoint.reason)}): <span class="mono">dinoguard undo ${esc(it.id.slice(0, 16))}</span></div>` : ""}
     ${it.output ? `<details><summary class="muted small">output</summary><pre class="box">${esc(it.output)}</pre></details>` : ""}
     ${decs}${kids}</div>`;
 }
@@ -78,7 +86,10 @@ function graphSvg(g) {
 DG.pages.trace = async (v, [sid]) => {
   const t = await api("/sessions/" + encodeURIComponent(sid) + "/trace");
   const s = t.session;
+  const ex = "/api/sessions/" + encodeURIComponent(sid) + "/export";
   v.innerHTML = `<h1>Trace <span class="muted mono small">${esc(sid)}</span></h1>
+  <div class="row small">Export (redacted): <a href="${ex}" download="dinoguard-${esc(sid.slice(0, 12))}.json">JSON</a> · <a href="${ex}?format=jsonl">JSONL</a>
+    · environment: <b>${esc(s.environment || "—")}</b> · model: <b>${esc(s.model || "—")}</b></div>
   <div class="grid">${tile("Harness", esc(s.harness))}${tile("Events", t.counts.events)}${tile("Model calls", t.counts.model_calls)}
   ${tile("Cost", money(s.cost_usd))}${tile("Status", esc(s.status))}</div>
   <p class="muted">Project: <span class="mono">${esc(s.cwd || "")}</span> · First prompt: ${esc(s.first_prompt || "—")}</p>
