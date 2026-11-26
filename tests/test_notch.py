@@ -239,3 +239,49 @@ def test_ease_transition_takes_035s(tk_root):
     assert m.COLLAPSED[0] < mid[2] < m.EXPANDED[0] and n.anim is not None
     n._step_anim(100.0 + m.TRANSITION_S + 0.01)
     assert n.rect == target and n.anim is None
+
+
+# ---- install opens the notch by default (2026-11-26) -----------------------------------------------------------
+
+def _no_com(monkeypatch):
+    if sys.platform == "win32":
+        monkeypatch.setattr("dinoguard.autostart._make_lnk", lambda target, args, description: False)
+
+
+def test_install_default_starts_notch_and_opens_on_login(monkeypatch):
+    from dinoguard import autostart
+    from dinoguard.cli.core import setup_notch
+    _no_com(monkeypatch)
+    monkeypatch.setattr("dinoguard.cli.core.desktop_available", lambda: None)
+    started = []
+    monkeypatch.setattr(notch_os, "spawn_detached", lambda: started.append(1) or 42)
+    msg = setup_notch()
+    assert "notch started" in msg and started == [1] and autostart.is_enabled("notch")
+    lock = notch_os.single_instance()                 # pretend the notch is now running
+    try:
+        assert "already running" in setup_notch() and started == [1]
+    finally:
+        lock.close()
+
+
+def test_notch_skipped_without_a_desktop(monkeypatch):
+    from dinoguard import autostart
+    from dinoguard.cli.core import desktop_available, setup_notch
+    monkeypatch.setenv("CI", "true")
+    assert desktop_available() == "CI / DG_NO_NOTCH"
+    assert "skipped" in setup_notch() and not autostart.is_enabled("notch")
+    monkeypatch.delenv("CI")
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    assert desktop_available() == "no display"
+
+
+def test_uninstall_removes_notch_login_entry(monkeypatch):
+    from dinoguard import autostart
+    from dinoguard.cli.main import main
+    _no_com(monkeypatch)
+    autostart.enable("notch", notch_os.launch_args())
+    autostart.enable("daemon", ["x"])
+    assert main(["uninstall"]) == 0
+    assert not autostart.is_enabled("notch") and not autostart.is_enabled("daemon")

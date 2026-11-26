@@ -13,8 +13,8 @@ Architecture inspired by FailproofAI. No code reused.
 
 ```bash
 pipx install dinoguard          # or: pip install dinoguard
-dinoguard install               # Claude Code hooks (user scope) + fail-closed daemon, started on login too
-dinoguard notch                 # floating always-on-top dino pill beside your apps (--autostart: open on login)
+dinoguard install               # Claude Code hooks + fail-closed daemon + floating dino notch, both open on login
+                                #   (--no-notch to skip the notch; it's skipped automatically in CI / headless)
 dinoguard runner                # dotted dino strip for a split pane
 dinoguard dashboard             # http://127.0.0.1:8030
 dinoguard demo                  # 60 s scripted risky session that shows every runner state
