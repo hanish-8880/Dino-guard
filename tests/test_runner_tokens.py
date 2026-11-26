@@ -120,3 +120,16 @@ def test_demo_runs_headless(monkeypatch, tmp_path):
     lines = open(os.path.join(os.environ["DINOGUARD_HOME"], "stream.jsonl"), encoding="utf-8").read().splitlines()
     kinds = {json.loads(x).get("decision") for x in lines}
     assert {"allow", "instruct", "deny"} <= kinds
+
+
+def test_idle_agent_stops_sprinting():
+    """A high burn from the last call must not keep the dino sprinting once the agent goes idle."""
+    from dinoguard.runner_ui.state import BURN_STALE_S, RunnerState
+
+    st = RunnerState(burn_high_per_min=20000)
+    st.feed({"decision": "allow", "tool": "Bash", "tokens": {"burn_per_min": 45000, "context_tokens": 90000}}, now=0.0)
+    assert st.current(now=1.0) == "sprint"
+    assert st.current(now=BURN_STALE_S + 5) == "walk"
+    assert st.tokens["burn_per_min"] == 0.0 and st.tokens["context_tokens"] == 90000
+    st.feed({"decision": "allow", "tool": "Bash", "tokens": {"burn_per_min": 45000}}, now=100.0)
+    assert st.current(now=101.0) == "sprint"

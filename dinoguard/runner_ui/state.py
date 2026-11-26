@@ -10,6 +10,7 @@ STYLE = {
     "review": "medium_purple", "wait": "dodger_blue1", "ghost": "grey50", "guard_down": "white on red",
 }
 TRANSIENT = {"instruct": 3.0, "deny": 4.0, "shield": 4.0, "ghost": 2.5, "sprint": 3.0}
+BURN_STALE_S = 60.0  # burn is "tokens in the last minute": with no new record for this long, it is really 0
 
 
 @dataclass
@@ -22,6 +23,7 @@ class RunnerState:
     last: str = ""
     tokens: dict = field(default_factory=dict)
     events: int = 0
+    tokens_at: float = 0.0
 
     def _set(self, st: str, now: float):
         self.state, self.since = st, now
@@ -30,7 +32,8 @@ class RunnerState:
         now = time.monotonic() if now is None else now
         kind = rec.get("kind", "event")
         if rec.get("tokens"):
-            self.tokens = rec["tokens"]
+            self.tokens = dict(rec["tokens"])
+            self.tokens_at = now
         if kind == "guard_down":
             self._set("guard_down", now)
             self.message = f"GUARD DOWN: {rec.get('reason', '')}"
@@ -70,11 +73,17 @@ class RunnerState:
                 self.message = ""
         return self.state
 
+    def _expire_burn(self, now: float) -> None:
+        """The last record's burn rate goes stale when the agent goes idle; don't sprint on an old number."""
+        if self.tokens.get("burn_per_min") and now - self.tokens_at > BURN_STALE_S:
+            self.tokens = {**self.tokens, "burn_per_min": 0.0}
+
     def burn_high(self) -> bool:
         return float(self.tokens.get("burn_per_min") or 0) >= self.burn_high_per_min
 
     def current(self, now: float | None = None) -> str:
         now = time.monotonic() if now is None else now
+        self._expire_burn(now)
         hold = TRANSIENT.get(self.state)
         if hold and now - self.since > hold:
             self._set("sprint" if self.burn_high() else "walk", now)
