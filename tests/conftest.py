@@ -25,6 +25,11 @@ def dg_home(tmp_path, monkeypatch):
         monkeypatch.delenv(k, raising=False)
     # Hooks may auto-start a missing daemon; tests must never spawn a real background process.
     monkeypatch.setattr("dinoguard.daemon.server.start_detached", lambda: 0)
+    # ...nor write to the real Startup folder or open a real notch window
+    monkeypatch.setenv("DG_STARTUP_DIR", str(tmp_path / "Startup"))
+    monkeypatch.setattr("dinoguard.runner_ui.notch_os.spawn_detached", lambda: 0)
+    for k in ("CI", "GITHUB_ACTIONS", "DG_NO_NOTCH"):
+        monkeypatch.delenv(k, raising=False)
     return home
 
 

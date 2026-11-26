@@ -50,8 +50,44 @@ def cmd_install(args) -> int:
             console.print(f"{OK} {enable_daemon_autostart()}")
         else:
             console.print(f"{WARN} daemon did not start; staying in in-process mode. Run `dinoguard doctor`.")
+    if not getattr(args, "no_notch", False):
+        console.print(setup_notch())
     console.print("Next: [bold]dinoguard runner[/] in a split pane, [bold]dinoguard dashboard[/] for the UI.")
     return 0
+
+
+def desktop_available() -> str | None:
+    """None if a desktop notch makes sense here, else why not (CI, no display, no tkinter)."""
+    if any(os.environ.get(k) for k in ("CI", "GITHUB_ACTIONS", "DG_NO_NOTCH")):
+        return "CI / DG_NO_NOTCH"
+    if sys.platform.startswith("linux") and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        return "no display"
+    try:
+        import tkinter  # noqa: F401
+    except ImportError:
+        return "tkinter is not installed"
+    return None
+
+
+def setup_notch() -> str:
+    """Install default: open the floating notch now and on every login (skipped without a desktop)."""
+    why_not = desktop_available()
+    if why_not:
+        return f"{WARN} notch skipped ({why_not}); start it later with `dinoguard notch --autostart`"
+    from ..runner_ui import notch_os
+    try:
+        where = notch_os.enable_autostart()
+    except OSError as e:
+        return f"{WARN} could not set the notch to open on login ({e}); run `dinoguard notch --autostart`"
+    probe = notch_os.single_instance()
+    if probe is None:
+        return f"{OK} notch opens on login ({where}); it's already running"
+    probe.close()
+    try:
+        notch_os.spawn_detached()
+    except OSError as e:
+        return f"{WARN} notch set to open on login, but it didn't start now ({e}); run `dinoguard notch`"
+    return f"{OK} dino notch started, and opens on login ({where}). Right-click it to move or hide it."
 
 
 def cmd_uninstall(args) -> int:
@@ -69,6 +105,8 @@ def cmd_uninstall(args) -> int:
     from .. import autostart
     if autostart.disable("daemon"):
         console.print(f"{OK} daemon no longer starts on login")
+    if autostart.disable("notch"):
+        console.print(f"{OK} notch no longer opens on login (right-click it → Quit to close it now)")
     return 0
 
 

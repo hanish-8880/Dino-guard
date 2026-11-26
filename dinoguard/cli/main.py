@@ -23,6 +23,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--harness", default="claude")
     p.add_argument("--scope", default="user", choices=["user", "project", "local"])
     p.add_argument("--no-daemon", action="store_true", help="evaluate in the hook process (no daemon)")
+    p.add_argument("--no-notch", action="store_true", help="don't start the floating notch or open it on login")
     p = _p(sub, "uninstall", "Remove DinoGuard hooks and restore harness settings", core.cmd_uninstall)
     p.add_argument("--harness", default="claude")
     p.add_argument("--scope", default="user", choices=["user", "project", "local"])
