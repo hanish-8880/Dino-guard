@@ -190,9 +190,13 @@ def stop() -> bool:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="dinoguardd", description="DinoGuard evaluator daemon")
     ap.add_argument("--version", action="version", version=f"dinoguardd {__version__} (protocol {PROTOCOL_VERSION})")
-    ap.parse_args(argv)
+    ap.add_argument("--login", action="store_true", help="started on login: skip if the user stopped it on purpose")
+    args = ap.parse_args(argv)
+    if args.login and (paths.home() / "daemon.stopped").exists():
+        return 0
     if is_running(1.0):
-        print("dinoguardd already running", file=sys.stderr)
+        if sys.stderr:                       # None under pythonw (the login shortcut has no console)
+            print("dinoguardd already running", file=sys.stderr)
         return 0
     d = Daemon().bind()
     signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=d.shutdown, daemon=True).start())

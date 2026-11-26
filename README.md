@@ -12,8 +12,8 @@ Architecture inspired by FailproofAI. No code reused.
 ## Quick start
 
 ```bash
-pipx install git+https://github.com/hanish-8880/dino-guard   # PyPI release coming soon
-dinoguard install               # Claude Code hooks (user scope) + start the fail-closed daemon
+pipx install dinoguard          # or: pip install dinoguard
+dinoguard install               # Claude Code hooks (user scope) + fail-closed daemon, started on login too
 dinoguard notch                 # floating always-on-top dino pill beside your apps (--autostart: open on login)
 dinoguard runner                # dotted dino strip for a split pane
 dinoguard dashboard             # http://127.0.0.1:8030

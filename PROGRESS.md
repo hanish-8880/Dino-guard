@@ -1,7 +1,7 @@
 # PROGRESS
 
 Built in one pass on 2026-11-25, phase by phase per CLAUDE.md §14. `pytest -q` was green at the end of every phase.
-Current: **509 tests passing** (after Phases 12–13 on 2026-11-26). Every file is under 400 lines (largest is 342).
+Current: **510 tests passing** (after Phases 12–13 on 2026-11-26). Every file is under 400 lines (largest is 342).
 
 ## Phase 13 — SDK lifecycle, more harnesses, MCP writes, undo ✅ (2026-11-26, CLAUDE.md §17.9–17.12)
 Tests: `tests/test_sdk_tracer.py`, `tests/test_more_harnesses.py`, `tests/test_mcp_undo.py`, plus new cases in
@@ -29,11 +29,15 @@ file-path field names). Deep Agents Code fails open on hook errors (no option to
   so your prompts were blocked until the daemon came back. Now a hook that finds no daemon running starts it once
   and retries. It still denies on failure, version skew, timeouts and bad tokens, and it never restarts a daemon
   you stopped with `dinoguard daemon stop`. `daemon.autostart=false` turns this off.
+  The daemon also **starts on login** now: `dinoguard install` adds a Startup-folder shortcut (`pythonw -m
+  dinoguard.daemon.server --login`, no window; LaunchAgent on macOS, XDG autostart on Linux), and uninstall removes
+  it. `dinoguard daemon autostart|no-autostart` toggles it, and doctor shows it. A login start is skipped after a
+  deliberate `daemon stop`. Enabled on this laptop 2026-11-26.
 - **Phase 4, done-when on real traffic.** Replaying today's real hook stream (604 records from this live Claude Code
   session) through the runner state machine: walk 449, sprint 134, guard-down 11, shield 6, instruct 2, deny 2.
 - **Phase 11, packaging.** A wheel builds cleanly (163 files, with migrations, dashboard assets, prices and the 3
-  console scripts), installs into a fresh venv, and runs `dinoguard --version`. **Publishing to PyPI still needs
-  your account**, so it isn't done.
+  console scripts), installs into a fresh venv, and runs `dinoguard --version`. **Published to PyPI as
+  `dinoguard` 0.1.0 on 2026-11-26** (wheel + sdist, both pass `twine check`), so `pipx install dinoguard` works.
 
 ## Phase 12 — Inventory gaps, local core ✅ (2026-11-26, CLAUDE.md §17.1–17.8)
 Added after the 2026-11-26 feature inventory. Tests: `tests/test_inventory_data.py`, `tests/test_inventory_audit.py`,
@@ -242,8 +246,7 @@ Run 11 needs `dinoguard approve setup` to show the blue "?".
 ## Phase 11 — Showcase polish ✅ (partial)
 - A first-run wizard (skipped with `DG_NO_FIRST_RUN=1` or without a TTY), `demo/run_demo.py`, `demo/make_gif.py`,
   and a README with the GIF and the required attribution line.
-- **Not done:** publishing to PyPI. `pipx install dinoguard` only works once you publish; until then use
-  `pip install -e .`.
+- Published to PyPI 2026-11-26: `pipx install dinoguard`.
 
 ## Decisions / deviations (please review)
 - Enabled built-ins run in **enforce** by default (Phase 2's done-when needs it). New custom, pack and deployed
@@ -265,7 +268,6 @@ Run 11 needs `dinoguard approve setup` to show the blue "?".
 - **Needs your accounts or credentials:**
   - real WhatsApp/Telegram/Slack/email delivery and the LLM reviewer/judge/drafting against a live endpoint
     (implemented, covered with fakes)
-  - publishing to PyPI (the wheel builds and installs; `pipx install dinoguard` works once it's published)
   - a networked pack install from a real GitHub release (tested from a local folder and with a mirror URL)
 - **Field names still unverified** (common spellings are accepted, and `dinoguard doctor` reports hook drift):
   - Devin read/write/edit

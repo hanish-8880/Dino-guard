@@ -96,7 +96,8 @@ def test_single_instance_lock(dg_home):
 def test_autostart_on_and_off(tmp_path, monkeypatch):
     monkeypatch.setenv("DG_STARTUP_DIR", str(tmp_path / "Startup"))
     if sys.platform == "win32":
-        monkeypatch.setattr(notch_os, "_make_lnk", lambda target, args: False)   # exercise the no-COM fallback
+        # exercise the no-COM fallback (the shortcut code moved to dinoguard/autostart.py, shared with the daemon)
+        monkeypatch.setattr("dinoguard.autostart._make_lnk", lambda target, args, description: False)
     p = notch_os.enable_autostart()
     assert p.exists() and p.parent == tmp_path / "Startup"
     text = p.read_text(encoding="utf-8")

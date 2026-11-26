@@ -116,3 +116,26 @@ def test_deliberate_stop_and_opt_out_are_respected(dg_home, monkeypatch):
     (dg_home / "daemon.stopped").unlink()
     config.update(lambda c: c["daemon"].update(autostart=False))
     assert run("claude", pre("ls"))[0] == 2 and calls == []
+
+
+def test_daemon_login_autostart_entry(tmp_path, monkeypatch, dg_home):
+    import sys
+
+    from dinoguard import autostart
+    from dinoguard.cli.core import daemon_login_args, doctor_checks
+    from dinoguard.daemon import server
+    monkeypatch.setenv("DG_STARTUP_DIR", str(tmp_path / "Startup"))
+    if sys.platform == "win32":
+        monkeypatch.setattr(autostart, "_make_lnk", lambda target, args, description: False)
+    _enable()
+    assert any(c[1] == "daemon on login" and c[0] == "warn" for c in doctor_checks())
+    p = autostart.enable("daemon", daemon_login_args())
+    text = p.read_text(encoding="utf-8")
+    assert "dinoguard.daemon.server" in text and "--login" in text
+    assert any(c[1] == "daemon on login" and c[0] == "ok" for c in doctor_checks())
+    assert autostart.path("notch") != autostart.path("daemon")     # separate entries
+    assert autostart.disable("daemon") and not autostart.is_enabled("daemon")
+    # a deliberate stop survives a reboot: the login start exits at once
+    (dg_home / "daemon.stopped").write_text("x")
+    monkeypatch.setattr(server, "Daemon", lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not start")))
+    assert server.main(["--login"]) == 0

@@ -47,6 +47,7 @@ def cmd_install(args) -> int:
         if is_running(3.0):
             config.update(lambda c: c["daemon"].update(enabled=True))
             console.print(f"{OK} daemon running (fail-closed enabled)")
+            console.print(f"{OK} {enable_daemon_autostart()}")
         else:
             console.print(f"{WARN} daemon did not start; staying in in-process mode. Run `dinoguard doctor`.")
     console.print("Next: [bold]dinoguard runner[/] in a split pane, [bold]dinoguard dashboard[/] for the UI.")
@@ -65,6 +66,9 @@ def cmd_uninstall(args) -> int:
     from ..daemon.server import stop
     if stop():
         console.print(f"{OK} daemon stopped")
+    from .. import autostart
+    if autostart.disable("daemon"):
+        console.print(f"{OK} daemon no longer starts on login")
     return 0
 
 
@@ -99,6 +103,12 @@ def doctor_checks() -> list[tuple[str, str, str]]:
                 out.append(("warn", "policy load", f"{e['file']}: {e['error']}"))
         except dclient.DaemonError as e:
             out.append(("fail", "daemon", f"{e} - every action is being DENIED. Fix: `dinoguard daemon start`"))
+        from .. import autostart
+        if autostart.is_enabled("daemon"):
+            out.append(("ok", "daemon on login", str(autostart.path("daemon"))))
+        else:
+            out.append(("warn", "daemon on login", "not set: after a reboot the first hook has to start it. "
+                                                   "Fix: `dinoguard daemon autostart`"))
     else:
         out.append(("warn", "daemon", "not configured: hooks evaluate in-process (no fail-closed daemon)"))
     from ..adapters.install import wiring
@@ -221,10 +231,33 @@ def cmd_pause(args) -> int:
     return 0
 
 
+def daemon_login_args() -> list[str]:
+    from ..autostart import gui_python
+    return [gui_python(), "-m", "dinoguard.daemon.server", "--login"]
+
+
+def enable_daemon_autostart() -> str:
+    """Start dinoguardd on login, so a reboot never leaves every action denied. Returns a message."""
+    from .. import autostart
+    try:
+        return f"daemon starts on login ({autostart.enable('daemon', daemon_login_args())})"
+    except OSError as e:
+        return f"could not add the login entry ({e}); hooks still start the daemon on first use"
+
+
 def cmd_daemon(args) -> int:
     from ..daemon import server
     if args.action == "run":
         return server.main([])
+    if args.action == "autostart":
+        console.print(f"{OK} {enable_daemon_autostart()}")
+        return 0
+    if args.action == "no-autostart":
+        from .. import autostart
+        removed = autostart.disable("daemon")
+        console.print(f"{OK} removed the login entry" if removed else f"{WARN} it was not set to start on login")
+        console.print("   hooks still start a missing daemon on first use unless config daemon.autostart is false")
+        return 0
     marker = paths.home() / "daemon.stopped"       # hooks don't auto-start a daemon you stopped on purpose
     if args.action in ("stop", "restart"):
         console.print(f"{OK} stopped" if server.stop() else f"{WARN} not running")
